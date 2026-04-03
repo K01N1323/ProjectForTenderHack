@@ -32,8 +32,24 @@ interface StoreState {
 
 export const useStore = create<StoreState>((set) => ({
   user: null,
-  setUser: (user) => set({ user }),
-  logout: () => set({ user: null }),
+  setUser: (user) =>
+    set({
+      user,
+      viewedCategories: user.viewedCategories ?? [],
+      bouncedCategories: [],
+      productOpenTimes: {},
+    }),
+  logout: () =>
+    set({
+      user: null,
+      viewedCategories: [],
+      bouncedCategories: [],
+      productOpenTimes: {},
+      results: [],
+      searchQuery: '',
+      suggestions: [],
+      correctedQuery: null,
+    }),
 
   viewedCategories: [],
   bouncedCategories: [],

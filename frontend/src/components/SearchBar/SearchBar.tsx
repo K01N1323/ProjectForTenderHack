@@ -32,9 +32,9 @@ const SearchBar = () => {
         try {
             const response = await searchProducts(
                 queryToSearch, 
+                user,
                 viewedCategories, 
                 bouncedCategories, 
-                user?.region || 'Moscow'
             );
             setResults(response.items);
             setCorrectedQuery(response.correctedQuery || null);
@@ -55,9 +55,13 @@ const SearchBar = () => {
         }
 
         timerRef.current = setTimeout(async () => {
-            // Get suggestions immediately
-            const suggs = await getSuggestions(localQuery);
-            setSuggestions(suggs);
+            try {
+                const suggs = await getSuggestions(localQuery);
+                setSuggestions(suggs);
+            } catch (error) {
+                console.error(error);
+                setSuggestions([]);
+            }
             // Optionally, we could also auto-perform search here if the user stopped typing
             // For now, let's just show suggestions and let User hit "Enter" or click 'Search'
         }, 300);
