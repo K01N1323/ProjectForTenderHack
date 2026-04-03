@@ -1,0 +1,17 @@
+.DS_Store
+.idea/
+__pycache__/
+*.pyc
+
+# Raw local inputs
+*.jpeg
+*.jpg
+*.png
+*.pdf
+СТЕ_*.csv
+Контракты_*.csv
+
+# Generated data artifacts
+data/processed/
+reports/
+
