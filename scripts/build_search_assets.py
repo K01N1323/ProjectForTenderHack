@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import sqlite3
 from collections import Counter, defaultdict
 from pathlib import Path
 
 
 PROGRESS_EVERY = 100_000
+SEMANTIC_PRUNE_WINDOW = 48
 
 
 def build_search_schema(conn: sqlite3.Connection) -> None:
@@ -22,6 +24,7 @@ def build_search_schema(conn: sqlite3.Connection) -> None:
         DROP TABLE IF EXISTS ste_catalog;
         DROP TABLE IF EXISTS token_frequency;
         DROP TABLE IF EXISTS search_metadata;
+        DROP TABLE IF EXISTS semantic_neighbors;
         DROP TABLE IF EXISTS ste_catalog_fts;
 
         CREATE TABLE ste_catalog (
@@ -56,6 +59,17 @@ def build_search_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX token_frequency_lookup_idx
         ON token_frequency(first_char, token_length, frequency DESC);
 
+        CREATE TABLE semantic_neighbors (
+            token TEXT NOT NULL,
+            neighbor TEXT NOT NULL,
+            score REAL NOT NULL,
+            cooccurrence INTEGER NOT NULL,
+            PRIMARY KEY (token, neighbor)
+        );
+
+        CREATE INDEX semantic_neighbors_token_idx
+        ON semantic_neighbors(token, score DESC);
+
         CREATE TABLE search_metadata (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
@@ -65,11 +79,170 @@ def build_search_schema(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def ensure_semantic_schema(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS semantic_neighbors (
+            token TEXT NOT NULL,
+            neighbor TEXT NOT NULL,
+            score REAL NOT NULL,
+            cooccurrence INTEGER NOT NULL,
+            PRIMARY KEY (token, neighbor)
+        );
+
+        CREATE INDEX IF NOT EXISTS semantic_neighbors_token_idx
+        ON semantic_neighbors(token, score DESC);
+        """
+    )
+    conn.commit()
+
+
+def prune_neighbor_counts(neighbor_counts: dict[str, Counter[str]], keep_limit: int) -> None:
+    for token, counter in list(neighbor_counts.items()):
+        if len(counter) <= keep_limit * 2:
+            continue
+        neighbor_counts[token] = Counter(dict(counter.most_common(keep_limit)))
+
+
+def build_semantic_neighbors(
+    conn: sqlite3.Connection,
+    token_counter: Counter[str],
+    semantic_min_frequency: int = 10,
+    semantic_neighbors_per_token: int = 8,
+) -> tuple[int, int]:
+    ensure_semantic_schema(conn)
+    conn.execute("DELETE FROM semantic_neighbors")
+    conn.execute("DELETE FROM search_metadata WHERE key IN ('semantic_vocab_size', 'semantic_edge_count')")
+    conn.commit()
+
+    semantic_vocab = {
+        token
+        for token, frequency in token_counter.items()
+        if len(token) >= 3 and not token.isdigit() and frequency >= semantic_min_frequency
+    }
+    if not semantic_vocab:
+        conn.executemany(
+            "INSERT INTO search_metadata (key, value) VALUES (?, ?)",
+            [
+                ("semantic_vocab_size", "0"),
+                ("semantic_edge_count", "0"),
+            ],
+        )
+        conn.commit()
+        return 0, 0
+
+    neighbor_counts: dict[str, Counter[str]] = defaultdict(Counter)
+    row_count = 0
+    for normalized_name, normalized_category, key_tokens in conn.execute(
+        "SELECT normalized_name, normalized_category, key_tokens FROM ste_catalog"
+    ):
+        row_count += 1
+        row_tokens = unique_preserve_order(
+            [
+                token
+                for token in tokenize(f"{normalized_name} {normalized_category} {key_tokens}")
+                if token in semantic_vocab
+            ]
+        )
+        if len(row_tokens) < 2:
+            continue
+        if len(row_tokens) > 14:
+            row_tokens = sorted(
+                row_tokens,
+                key=lambda token: (token_counter[token], -len(token), token),
+            )[:14]
+        for token in row_tokens:
+            counter = neighbor_counts[token]
+            for neighbor in row_tokens:
+                if token == neighbor:
+                    continue
+                counter[neighbor] += 1
+        if row_count % PROGRESS_EVERY == 0:
+            prune_neighbor_counts(neighbor_counts, keep_limit=max(semantic_neighbors_per_token * 4, SEMANTIC_PRUNE_WINDOW))
+            print(f"[Semantic] processed {row_count:,} deduped rows", flush=True)
+
+    prune_neighbor_counts(neighbor_counts, keep_limit=max(semantic_neighbors_per_token * 4, SEMANTIC_PRUNE_WINDOW))
+
+    semantic_rows = []
+    for token, counter in neighbor_counts.items():
+        token_frequency = token_counter[token]
+        scored_neighbors = []
+        for neighbor, cooccurrence in counter.items():
+            neighbor_frequency = token_counter.get(neighbor, 0)
+            if neighbor_frequency == 0:
+                continue
+            if cooccurrence < max(1, min(2, semantic_min_frequency)):
+                continue
+            association = cooccurrence / math.sqrt(token_frequency * neighbor_frequency)
+            score = association + 0.2 * ngram_jaccard(token, neighbor)
+            if score <= 0.05:
+                continue
+            scored_neighbors.append((neighbor, score, cooccurrence))
+        scored_neighbors.sort(
+            key=lambda item: (item[1], item[2], token_counter[item[0]], item[0]),
+            reverse=True,
+        )
+        for neighbor, score, cooccurrence in scored_neighbors[:semantic_neighbors_per_token]:
+            semantic_rows.append((token, neighbor, round(score, 6), cooccurrence))
+
+    conn.executemany(
+        "INSERT INTO semantic_neighbors (token, neighbor, score, cooccurrence) VALUES (?, ?, ?, ?)",
+        semantic_rows,
+    )
+    conn.executemany(
+        "INSERT INTO search_metadata (key, value) VALUES (?, ?)",
+        [
+            ("semantic_vocab_size", str(len(semantic_vocab))),
+            ("semantic_edge_count", str(len(semantic_rows))),
+        ],
+    )
+    conn.commit()
+    return len(semantic_vocab), len(semantic_rows)
+
+
 def tokenize(value: str) -> list[str]:
     return [token for token in value.split() if token]
 
 
-def build_search_db(catalog_path: Path, search_db_path: Path) -> None:
+def unique_preserve_order(items: list[str]) -> list[str]:
+    result: list[str] = []
+    seen = set()
+    for item in items:
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        result.append(item)
+    return result
+
+
+def char_ngrams(value: str, min_n: int = 3, max_n: int = 5) -> set[str]:
+    padded = f"<{value}>"
+    ngrams: set[str] = set()
+    for size in range(min_n, max_n + 1):
+        if len(padded) < size:
+            continue
+        for index in range(len(padded) - size + 1):
+            ngrams.add(padded[index : index + size])
+    return ngrams
+
+
+def ngram_jaccard(left: str, right: str) -> float:
+    left_ngrams = char_ngrams(left)
+    right_ngrams = char_ngrams(right)
+    if not left_ngrams or not right_ngrams:
+        return 0.0
+    union = len(left_ngrams | right_ngrams)
+    if union == 0:
+        return 0.0
+    return len(left_ngrams & right_ngrams) / union
+
+
+def build_search_db(
+    catalog_path: Path,
+    search_db_path: Path,
+    semantic_min_frequency: int = 10,
+    semantic_neighbors_per_token: int = 8,
+) -> None:
     if search_db_path.exists():
         search_db_path.unlink()
     conn = sqlite3.connect(search_db_path)
@@ -195,6 +368,12 @@ def build_search_db(catalog_path: Path, search_db_path: Path) -> None:
             "INSERT INTO token_frequency (token, first_char, token_length, frequency) VALUES (?, ?, ?, ?)",
             token_rows,
         )
+        build_semantic_neighbors(
+            conn,
+            token_counter=token_counter,
+            semantic_min_frequency=semantic_min_frequency,
+            semantic_neighbors_per_token=semantic_neighbors_per_token,
+        )
         conn.executemany(
             "INSERT INTO search_metadata (key, value) VALUES (?, ?)",
             [
@@ -204,6 +383,31 @@ def build_search_db(catalog_path: Path, search_db_path: Path) -> None:
             ],
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def rebuild_semantic_assets(
+    search_db_path: Path,
+    semantic_min_frequency: int = 10,
+    semantic_neighbors_per_token: int = 8,
+) -> tuple[int, int]:
+    conn = sqlite3.connect(search_db_path)
+    try:
+        token_counter: Counter[str] = Counter(
+            {
+                row[0]: int(row[1])
+                for row in conn.execute(
+                    "SELECT token, frequency FROM token_frequency"
+                ).fetchall()
+            }
+        )
+        return build_semantic_neighbors(
+            conn,
+            token_counter=token_counter,
+            semantic_min_frequency=semantic_min_frequency,
+            semantic_neighbors_per_token=semantic_neighbors_per_token,
+        )
     finally:
         conn.close()
 
@@ -266,9 +470,25 @@ def main() -> None:
     parser.add_argument("--search-db-path", default="data/processed/tenderhack_search.sqlite")
     parser.add_argument("--preprocessed-db-path", default="data/processed/tenderhack_preprocessed.sqlite")
     parser.add_argument("--customer-region-output", default="data/processed/customer_region_lookup.csv")
+    parser.add_argument("--semantic-min-frequency", type=int, default=10)
+    parser.add_argument("--semantic-neighbors-per-token", type=int, default=8)
+    parser.add_argument("--semantic-only", action="store_true", help="Rebuild only semantic neighbors on an existing search DB.")
     args = parser.parse_args()
 
-    build_search_db(Path(args.catalog_path), Path(args.search_db_path))
+    if args.semantic_only:
+        rebuild_semantic_assets(
+            Path(args.search_db_path),
+            semantic_min_frequency=args.semantic_min_frequency,
+            semantic_neighbors_per_token=args.semantic_neighbors_per_token,
+        )
+        return
+
+    build_search_db(
+        Path(args.catalog_path),
+        Path(args.search_db_path),
+        semantic_min_frequency=args.semantic_min_frequency,
+        semantic_neighbors_per_token=args.semantic_neighbors_per_token,
+    )
     build_customer_region_lookup(
         contracts_path=Path(args.contracts_path),
         preprocessed_db_path=Path(args.preprocessed_db_path),

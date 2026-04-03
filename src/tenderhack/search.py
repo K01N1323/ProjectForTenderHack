@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
-import math
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List
 
+from .semantic import DEFAULT_FASTTEXT_MODEL_PATH, SemanticExpander
 from .text import normalize_text, normalize_tokens, stem_token, stem_tokens, tokenize, unique_preserve_order
 
 
@@ -48,8 +48,10 @@ class QueryAnalysis:
     stemmed_tokens: List[str]
     expanded_tokens: List[str]
     expanded_stems: List[str]
+    semantic_expansions: List[str]
     applied_corrections: List[Dict[str, str]]
     applied_synonyms: List[Dict[str, List[str]]]
+    applied_semantic_neighbors: List[Dict[str, object]]
 
 
 class TypoCorrector:
@@ -139,6 +141,10 @@ class SearchService:
         self,
         search_db_path: Path | str = DEFAULT_SEARCH_DB,
         synonyms_path: Path | str = DEFAULT_SYNONYMS_PATH,
+        semantic_top_n: int = 4,
+        semantic_backend: str = "auto",
+        fasttext_model_path: Path | str = DEFAULT_FASTTEXT_MODEL_PATH,
+        fasttext_similarity_threshold: float = 0.55,
     ) -> None:
         self.search_db_path = Path(search_db_path)
         self.synonyms_path = Path(synonyms_path)
@@ -146,6 +152,13 @@ class SearchService:
         self.conn.row_factory = sqlite3.Row
         self.corrector = TypoCorrector(self.conn)
         self.synonyms = self._load_synonyms()
+        self.semantic_expander = SemanticExpander(
+            self.conn,
+            top_n=semantic_top_n,
+            backend=semantic_backend,
+            fasttext_model_path=fasttext_model_path,
+            fasttext_similarity_threshold=fasttext_similarity_threshold,
+        )
 
     def close(self) -> None:
         self.conn.close()
@@ -181,14 +194,48 @@ class SearchService:
             expanded_tokens.extend(tokenize(item))
         return unique_preserve_order(expanded_tokens), applied
 
+    @staticmethod
+    def _dedupe_applied_targets(items: List[Dict[str, object]]) -> List[Dict[str, object]]:
+        result: List[Dict[str, object]] = []
+        seen = set()
+        for item in items:
+            source = item.get("source")
+            targets = tuple(item.get("targets", []))
+            key = (source, targets)
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(item)
+        return result
+
     def analyze_query(self, query: str) -> QueryAnalysis:
         normalized_query = normalize_text(query)
         original_tokens = normalize_tokens(tokenize(normalized_query))
-        corrected_tokens, corrections = self.corrector.correct_tokens(original_tokens)
+
+        original_synonym_expansions, original_applied_synonyms = self._apply_synonyms(normalized_query, original_tokens)
+
+        corrected_tokens: List[str] = []
+        corrections: List[Dict[str, str]] = []
+        synonym_keys = set(self.synonyms["token_synonyms"].keys())
+        for token in original_tokens:
+            if token in synonym_keys:
+                corrected_tokens.append(token)
+                continue
+            corrected_part, applied_part = self.corrector.correct_tokens([token])
+            corrected_tokens.extend(corrected_part)
+            corrections.extend(applied_part)
+
         corrected_tokens = normalize_tokens(corrected_tokens)
         corrected_query = " ".join(corrected_tokens)
-        synonym_expansions, applied_synonyms = self._apply_synonyms(corrected_query or normalized_query, corrected_tokens)
-        merged_tokens = unique_preserve_order(corrected_tokens + synonym_expansions)
+
+        corrected_synonym_expansions, corrected_applied_synonyms = self._apply_synonyms(
+            corrected_query or normalized_query,
+            corrected_tokens,
+        )
+        synonym_expansions = unique_preserve_order(original_synonym_expansions + corrected_synonym_expansions)
+        applied_synonyms = self._dedupe_applied_targets(original_applied_synonyms + corrected_applied_synonyms)
+        semantic_expansions, applied_semantic_neighbors = self.semantic_expander.expand_tokens(corrected_tokens)
+        merged_tokens = unique_preserve_order(corrected_tokens + synonym_expansions + semantic_expansions)
         stemmed_tokens = stem_tokens(corrected_tokens)
         expanded_stems = stem_tokens(merged_tokens)
         return QueryAnalysis(
@@ -200,8 +247,10 @@ class SearchService:
             stemmed_tokens=stemmed_tokens,
             expanded_tokens=merged_tokens,
             expanded_stems=expanded_stems,
+            semantic_expansions=semantic_expansions,
             applied_corrections=corrections,
             applied_synonyms=applied_synonyms,
+            applied_semantic_neighbors=applied_semantic_neighbors,
         )
 
     def _build_match_query(self, analysis: QueryAnalysis) -> str:
@@ -256,6 +305,7 @@ class SearchService:
         corrected_set = set(analysis.corrected_tokens)
         stem_set = set(analysis.stemmed_tokens)
         expanded_stem_set = set(analysis.expanded_stems)
+        semantic_stem_set = set(stem_tokens(analysis.semantic_expansions))
 
         query_target = analysis.corrected_query or analysis.normalized_query
         exact_phrase = 1.0 if query_target and query_target in row["normalized_name"] else 0.0
@@ -263,13 +313,22 @@ class SearchService:
         stem_hits_name = len(stem_set & name_stems)
         stem_hits_category = len(expanded_stem_set & category_stems)
         stem_hits_key = len(expanded_stem_set & key_stems)
+        semantic_hits_name = len(semantic_stem_set & name_stems)
+        semantic_hits_category = len(semantic_stem_set & category_stems)
+        semantic_hits_key = len(semantic_stem_set & key_stems)
         full_name_cover = 1.0 if stem_set and stem_set.issubset(name_stems) else 0.0
         full_category_cover = 1.0 if stem_set and stem_set.issubset(category_stems) else 0.0
         synonym_bonus = 1.0 if analysis.applied_synonyms and stem_hits_name + stem_hits_category > 0 else 0.0
+        semantic_query = analysis.corrected_query or analysis.normalized_query
+        semantic_vector_similarity = self.semantic_expander.sentence_similarity(
+            semantic_query,
+            f"{row['normalized_name']} {row['normalized_category']} {row['key_tokens']}",
+        )
 
         coverage_denominator = max(1, len(corrected_set))
         stem_denominator = max(1, len(stem_set))
         expanded_denominator = max(1, len(expanded_stem_set))
+        semantic_denominator = max(1, len(semantic_stem_set))
 
         bm25_score = row["bm25_score"] if row["bm25_score"] is not None else 0.0
         bm25_component = 1.0 / (1.0 + max(0.0, bm25_score))
@@ -282,7 +341,11 @@ class SearchService:
         score += 4.0 * (stem_hits_name / stem_denominator)
         score += 3.0 * (stem_hits_category / expanded_denominator)
         score += 2.0 * (stem_hits_key / expanded_denominator)
+        score += 1.75 * (semantic_hits_name / semantic_denominator)
+        score += 1.25 * (semantic_hits_category / semantic_denominator)
+        score += 1.0 * (semantic_hits_key / semantic_denominator)
         score += 1.5 * synonym_bonus
+        score += 3.0 * semantic_vector_similarity
         score += 2.0 * bm25_component
 
         features = {
@@ -293,6 +356,10 @@ class SearchService:
             "name_stem_overlap": round(stem_hits_name / stem_denominator, 4),
             "category_stem_overlap": round(stem_hits_category / expanded_denominator, 4),
             "key_token_overlap": round(stem_hits_key / expanded_denominator, 4),
+            "semantic_name_overlap": round(semantic_hits_name / semantic_denominator, 4),
+            "semantic_category_overlap": round(semantic_hits_category / semantic_denominator, 4),
+            "semantic_key_overlap": round(semantic_hits_key / semantic_denominator, 4),
+            "semantic_vector_similarity": round(semantic_vector_similarity, 4),
             "synonym_bonus": round(synonym_bonus, 4),
             "bm25_component": round(bm25_component, 4),
         }
@@ -335,7 +402,10 @@ class SearchService:
                 "corrected_query": analysis.corrected_query,
                 "applied_corrections": analysis.applied_corrections,
                 "applied_synonyms": analysis.applied_synonyms,
+                "applied_semantic_neighbors": analysis.applied_semantic_neighbors,
+                "semantic_backend": self.semantic_expander.backend_name,
                 "expanded_tokens": analysis.expanded_tokens,
+                "semantic_expansions": analysis.semantic_expansions,
             },
             "results": scored_results[:top_k],
         }
@@ -349,8 +419,15 @@ def search_ste(
     top_k: int = 20,
     search_db_path: Path | str = DEFAULT_SEARCH_DB,
     synonyms_path: Path | str = DEFAULT_SYNONYMS_PATH,
+    semantic_backend: str = "auto",
+    fasttext_model_path: Path | str = DEFAULT_FASTTEXT_MODEL_PATH,
 ) -> List[Dict[str, object]]:
-    service = SearchService(search_db_path=search_db_path, synonyms_path=synonyms_path)
+    service = SearchService(
+        search_db_path=search_db_path,
+        synonyms_path=synonyms_path,
+        semantic_backend=semantic_backend,
+        fasttext_model_path=fasttext_model_path,
+    )
     try:
         return service.search_ste(query=query, top_k=top_k)
     finally:
