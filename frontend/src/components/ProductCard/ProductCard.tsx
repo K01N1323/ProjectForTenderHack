@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Product } from '../../types';
 import { useStore } from '../../store/store';
-import { ShoppingCart, X } from 'lucide-react';
+import { ChevronDown, ChevronUp, X } from 'lucide-react';
 
 interface ProductCardProps {
     product: Product;
@@ -10,7 +10,8 @@ interface ProductCardProps {
 
 const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
     const [isOpen, setIsOpen] = useState(false);
-    const { simulateProductOpen, simulateProductClose, addToCart } = useStore();
+    const [showChars, setShowChars] = useState(false);
+    const { simulateProductOpen, simulateProductClose } = useStore();
 
     const handleOpen = () => {
         setIsOpen(true);
@@ -23,19 +24,8 @@ const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
         simulateProductClose(product.id, product.category);
     };
 
-    // Cleanup in case of unmount while open
     useEffect(() => {
-        return () => {
-            if (isOpen) {
-                simulateProductClose(product.id, product.category);
-            }
-        };
-    }, [isOpen, product.id, product.category, simulateProductClose]);
-
-    useEffect(() => {
-        if (!isOpen) {
-            return;
-        }
+        if (!isOpen) return;
         const previousOverflow = document.body.style.overflow;
         document.body.style.overflow = 'hidden';
         return () => {
@@ -47,44 +37,89 @@ const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
         <>
             <div 
                 onClick={handleOpen}
-                className="bg-white rounded-[8px] p-5 flex flex-col hover:shadow-md transition-shadow cursor-pointer relative h-full border border-gray-100 group"
+                className="bg-white border border-gray-200 flex flex-col cursor-pointer relative h-full group hover:shadow-lg transition-shadow"
             >
-                {/* Personalization badge */}
-                {product.reasonToShow && (
-                    <div className="absolute -top-3 -right-3 bg-blue-50 text-blue-700 border border-blue-100 text-xs font-semibold px-3 py-1.5 rounded-full shadow-sm flex items-center gap-1 z-10">
-                        ✨ {product.reasonToShow}
+                {/* Product image placeholder */}
+                <div className="w-full aspect-[4/3] bg-gray-100 flex items-center justify-center border-b border-gray-200 overflow-hidden">
+                    <svg width="80" height="80" viewBox="0 0 80 80" fill="none" className="text-gray-300">
+                        <rect x="10" y="15" width="60" height="50" rx="4" stroke="currentColor" strokeWidth="2" fill="none"/>
+                        <circle cx="30" cy="35" r="6" stroke="currentColor" strokeWidth="2" fill="none"/>
+                        <path d="M10 55 L30 40 L45 50 L55 42 L70 55" stroke="currentColor" strokeWidth="2" fill="none"/>
+                    </svg>
+                </div>
+
+                {/* Content */}
+                <div className="p-5 flex flex-col flex-grow">
+                    {/* Product name */}
+                    <h3 className="text-[#333] font-bold text-base mb-4 line-clamp-3 min-h-[60px] leading-snug">
+                        {product.name}
+                    </h3>
+
+                    {/* ID СТЕ */}
+                    <div className="text-sm mb-1.5">
+                        <span className="font-bold text-gray-700">ID СТЕ </span>
+                        <span className="text-blue-600 underline decoration-dotted cursor-pointer">{product.id}</span>
                     </div>
-                )}
-                
-                <div className="text-xs text-gray-500 mb-2 uppercase tracking-wide truncate">{product.category}</div>
-                
-                <h3 className="text-gray-900 font-bold text-base md:text-lg mb-4 line-clamp-2 min-h-[50px] leading-snug group-hover:text-[#E03F3F] transition-colors">
-                    {product.name}
-                </h3>
-                
-                <div className="text-xs text-gray-400 mb-6">ИНН продавца: {product.supplierInn}</div>
-                
-                <div className="flex justify-between items-end mt-auto pt-4 border-t border-gray-50">
-                    <div className="text-red-600 font-bold text-xl md:text-2xl leading-none">
-                        {product.price.toLocaleString('ru-RU')} ₽
+
+                    {/* Производитель */}
+                    <div className="text-sm mb-1.5">
+                        <span className="font-bold text-gray-700">Производитель: </span>
+                        <span className="text-blue-600 cursor-pointer">{product.supplierInn}</span>
                     </div>
+
+                    {/* Категория */}
+                    <div className="text-sm mb-4">
+                        <span className="font-bold text-gray-700">Категория: </span>
+                        <span className="text-blue-600 cursor-pointer">{product.category}</span>
+                    </div>
+
+                    {/* Characteristics toggle */}
                     <button 
                         onClick={(e) => {
                             e.stopPropagation();
-                            addToCart(product.id, product.category);
+                            setShowChars(!showChars);
                         }}
-                        className="bg-[#E03F3F] hover:bg-red-700 text-white rounded-[4px] w-12 h-12 flex items-center justify-center transition-colors shadow-sm focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
+                        className="text-sm text-gray-700 font-semibold flex items-center gap-1 mb-4 underline decoration-dotted hover:text-blue-600 transition-colors"
                     >
-                        <ShoppingCart size={22} />
+                        Характеристики {showChars ? <ChevronUp size={16}/> : <ChevronDown size={16}/>}
                     </button>
+
+                    {showChars && product.descriptionPreview && (
+                        <div className="text-xs text-gray-600 mb-4 bg-gray-50 p-3 border border-gray-100">
+                            {product.descriptionPreview}
+                        </div>
+                    )}
+
+                    {/* Spacer */}
+                    <div className="flex-grow" />
+
+                    {/* Bottom section */}
+                    <div className="border-t border-gray-200 pt-4 mt-2 flex items-end justify-between">
+                        <div>
+                            <div className="text-lg font-bold text-gray-900">
+                                {product.price > 0 ? `${product.price.toLocaleString('ru-RU')} ₽` : '0'}
+                            </div>
+                            <div className="text-sm text-gray-500">Штука</div>
+                        </div>
+                        <div className="text-sm text-gray-500 italic">
+                            {product.price > 0 ? `${product.price.toLocaleString('ru-RU')} ₽` : 'Нет предложений'}
+                        </div>
+                    </div>
                 </div>
+
+                {/* Personalization badge */}
+                {product.reasonToShow && (
+                    <div className="absolute top-2 right-2 bg-blue-50 text-blue-700 border border-blue-100 text-xs font-semibold px-2.5 py-1 shadow-sm flex items-center gap-1 z-10">
+                        ✨ {product.reasonToShow}
+                    </div>
+                )}
             </div>
 
             {/* Simulated 'Opened Product' Modal */}
             {isOpen && typeof document !== 'undefined' && createPortal(
                 <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[9999] p-4 backdrop-blur-sm" onClick={handleClose}>
                     <div 
-                        className="bg-white w-full max-w-lg rounded-[8px] p-8 relative flex flex-col shadow-2xl"
+                        className="bg-white w-full max-w-lg p-8 relative flex flex-col shadow-2xl"
                         onClick={e => e.stopPropagation()}
                     >
                         <button onClick={handleClose} className="absolute top-4 right-4 text-gray-400 hover:text-gray-900 transition-colors">
@@ -94,17 +129,17 @@ const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
                         <h2 className="text-2xl md:text-3xl font-bold mb-6 text-gray-900 leading-tight">{product.name}</h2>
 
                         {product.descriptionPreview && (
-                            <div className="bg-gray-50 border border-gray-200 rounded p-4 mb-6 text-gray-700 text-sm leading-relaxed">
+                            <div className="bg-gray-50 border border-gray-200 p-4 mb-6 text-gray-700 text-sm leading-relaxed">
                                 {product.descriptionPreview}
                             </div>
                         )}
                         
-                        <div className="bg-blue-50 border border-blue-100 rounded p-4 mb-8 text-blue-800 text-sm">
+                        <div className="bg-blue-50 border border-blue-100 p-4 mb-8 text-blue-800 text-sm">
                             <p className="font-semibold mb-1">Режим имитации пользовательского опыта</p>
                             Закройте это окно <strong>быстрее, чем за 3 секунды</strong>, чтобы система засчитала "Быстрый отказ". В результате эта категория товаров будет реже появляться в ленте и упадет в рейтинге.
                         </div>
 
-                        <div className="text-red-600 font-bold text-3xl md:text-4xl">
+                        <div className="text-[#da291c] font-bold text-3xl md:text-4xl">
                             {product.price.toLocaleString('ru-RU')} ₽
                         </div>
                     </div>

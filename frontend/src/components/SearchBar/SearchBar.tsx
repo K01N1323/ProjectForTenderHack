@@ -110,14 +110,13 @@ const SearchBar = () => {
 
     return (
         <div
-            className={`relative w-full max-w-4xl mx-auto ${hasFloatingHelper ? 'pb-16 md:pb-20' : ''}`}
+            className={`relative w-full mx-auto ${hasFloatingHelper ? 'pb-16 md:pb-20' : ''}`}
         >
             {/* Input Form */}
             <form 
                 onSubmit={handleSearchSubmit} 
-                className="flex items-center bg-white shadow-xl rounded-full p-2 pl-6 relative z-20 border border-transparent focus-within:border-gray-200 transition-all"
+                className="flex items-stretch relative z-20"
             >
-                <Search size={28} className="text-gray-400" />
                 <input 
                     type="text" 
                     value={localQuery}
@@ -137,20 +136,20 @@ const SearchBar = () => {
                     }}
                     // Delay blur so click on suggestion can register
                     onBlur={() => setTimeout(() => setIsFocused(false), 200)}
-                    placeholder="Поиск по классификатору СТЕ..."
-                    className="flex-grow outline-none border-none text-xl text-gray-900 px-6 py-4 bg-transparent placeholder-gray-400"
+                    placeholder="Введите название категории, товара или ID СТЕ"
+                    className="flex-grow outline-none border-none text-base text-gray-900 px-5 py-3.5 bg-[#ecedf0] placeholder-gray-500"
                 />
                 <button 
                     type="submit" 
-                    className="bg-[#E03F3F] hover:bg-red-700 text-white px-10 py-4 rounded-full font-bold text-lg transition-colors flex-shrink-0"
+                    className="bg-[#da291c] hover:bg-red-700 text-white w-12 flex items-center justify-center transition-colors flex-shrink-0"
                 >
-                    Найти
+                    <Search size={20} />
                 </button>
             </form>
 
             {/* Suggestions Dropdown */}
             {isFocused && suggestions.length > 0 && (
-                <div className="absolute top-[80px] left-0 w-full bg-white shadow-lg rounded-xl border border-gray-100 mt-2 z-10 overflow-hidden py-2 hidden md:block">
+                <div className="absolute top-full left-0 w-full bg-white shadow-lg border border-gray-200 z-10 overflow-hidden py-1 hidden md:block">
                     {suggestions.map((suggestion, idx) => (
                         <div 
                             key={idx}
@@ -158,9 +157,9 @@ const SearchBar = () => {
                                 e.preventDefault();
                                 handleSuggestionClick(suggestion);
                             }}
-                            className="px-6 py-3 cursor-pointer hover:bg-gray-100 flex items-center gap-3 text-lg text-gray-800 transition-colors"
+                            className="px-5 py-2.5 cursor-pointer hover:bg-gray-100 flex items-center gap-3 text-sm text-gray-800 transition-colors"
                         >
-                            <Search size={18} className="text-gray-400" />
+                            <Search size={14} className="text-gray-400" />
                             {suggestion}
                         </div>
                     ))}
@@ -169,7 +168,7 @@ const SearchBar = () => {
 
             {/* "Did you mean.. / Возможно, вы искали" typo block */}
             {correctedQuery && !isFocused && (
-                <div className="absolute top-[90px] left-8 mt-2 text-gray-700 font-medium z-10 text-lg">
+                <div className="mt-3 text-gray-700 font-medium z-10 text-sm">
                     Возможно, вы искали: 
                     <span 
                         onClick={handleCorrectedQueryClick}
