@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Product } from '../../types';
 import { useStore } from '../../store/store';
-import { ChevronDown, ChevronUp, X } from 'lucide-react';
+import { ChevronDown, ChevronUp, X, ShoppingCart } from 'lucide-react';
 
 interface ProductCardProps {
     product: Product;
@@ -11,7 +11,7 @@ interface ProductCardProps {
 const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
     const [isOpen, setIsOpen] = useState(false);
     const [showChars, setShowChars] = useState(false);
-    const { simulateProductOpen, simulateProductClose } = useStore();
+    const { simulateProductOpen, simulateProductClose, addToCart } = useStore();
 
     const handleOpen = () => {
         setIsOpen(true);
@@ -39,14 +39,7 @@ const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
                 onClick={handleOpen}
                 className="bg-white border border-gray-200 flex flex-col cursor-pointer relative h-full group hover:shadow-lg transition-shadow"
             >
-                {/* Product image placeholder */}
-                <div className="w-full aspect-[4/3] bg-gray-100 flex items-center justify-center border-b border-gray-200 overflow-hidden">
-                    <svg width="80" height="80" viewBox="0 0 80 80" fill="none" className="text-gray-300">
-                        <rect x="10" y="15" width="60" height="50" rx="4" stroke="currentColor" strokeWidth="2" fill="none"/>
-                        <circle cx="30" cy="35" r="6" stroke="currentColor" strokeWidth="2" fill="none"/>
-                        <path d="M10 55 L30 40 L45 50 L55 42 L70 55" stroke="currentColor" strokeWidth="2" fill="none"/>
-                    </svg>
-                </div>
+
 
                 {/* Content */}
                 <div className="p-5 flex flex-col flex-grow">
