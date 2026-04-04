@@ -162,6 +162,30 @@ class SearchServiceTests(unittest.TestCase):
         self.assertTrue({"многофункциональное", "устройство"} & semantic_targets)
         self.assertGreater(payload["results"][0]["search_features"]["semantic_name_overlap"], 0.0)
 
+    def test_incomplete_word_query_uses_completions_without_bad_short_correction(self) -> None:
+        payload = self.service.search("мног", top_k=3)
+        self.assertEqual(payload["results"][0]["ste_id"], "ste-4")
+        self.assertEqual(payload["query"]["corrected_query"], "мног")
+        self.assertFalse(payload["query"]["applied_corrections"])
+        completion_targets = {
+            target
+            for item in payload["query"]["applied_completions"]
+            if item["source"] == "мног"
+            for target in item["targets"]
+        }
+        self.assertIn("многофункциональное", completion_targets)
+
+    def test_incomplete_category_prefix_adds_completion_variants(self) -> None:
+        payload = self.service.search("канц", top_k=3)
+        self.assertEqual(payload["results"][0]["ste_id"], "ste-1")
+        completion_targets = {
+            target
+            for item in payload["query"]["applied_completions"]
+            if item["source"] == "канц"
+            for target in item["targets"]
+        }
+        self.assertTrue({"канцелярская", "канцелярские"} & completion_targets)
+
 
 if __name__ == "__main__":
     unittest.main()

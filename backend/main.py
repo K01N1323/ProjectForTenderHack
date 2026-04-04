@@ -189,8 +189,8 @@ class EventResponsePayload(BaseModel):
 
 
 class TenderHackApiService:
-    LOGIN_CACHE_VERSION = 2
-    SUGGESTIONS_CACHE_VERSION = 3
+    LOGIN_CACHE_VERSION = 4
+    SUGGESTIONS_CACHE_VERSION = 5
 
     def __init__(self, settings: AppSettings) -> None:
         self.settings = settings
@@ -253,9 +253,11 @@ class TenderHackApiService:
             return UserPayload(**cached_payload)
 
         profile = self.personalization_service.build_customer_profile(customer_inn=inn)
-        viewed_categories = [item["category"] for item in profile.get("top_categories", [])[:5]]
+        recommended_categories = list(profile.get("recommended_categories") or profile.get("top_categories") or [])
+        recommended_ste = list(profile.get("recommended_ste") or profile.get("top_ste") or [])
+        viewed_categories = [str(item.get("category") or "") for item in recommended_categories[:5] if item.get("category")]
         region = str(profile.get("customer_region") or "")
-        frequent_products = self._load_frequent_products(profile.get("top_ste", [])[:6])
+        frequent_products = self._load_frequent_products(recommended_ste[:6])
         payload = UserPayload(
             id=f"user-{inn}",
             inn=inn,
@@ -266,8 +268,10 @@ class TenderHackApiService:
                     "category": str(item.get("category") or ""),
                     "purchaseCount": int(item.get("purchase_count") or 0),
                     "totalAmount": round(float(item.get("total_amount") or 0.0), 2),
+                    "reason": str(item.get("reason") or "Часто закупалось учреждением"),
+                    "recommendationScore": round(float(item.get("recommendation_score") or item.get("weight") or 0.0), 4),
                 }
-                for item in profile.get("top_categories", [])[:6]
+                for item in recommended_categories[:6]
             ],
             frequentProducts=frequent_products,
         )
@@ -308,6 +312,8 @@ class TenderHackApiService:
                     "category": str(item.get("category") or ""),
                     "purchaseCount": int(item.get("purchase_count") or 0),
                     "totalAmount": round(float(item.get("total_amount") or 0.0), 2),
+                    "reason": str(item.get("reason") or "Часто закупалось учреждением"),
+                    "recommendationScore": round(float(item.get("recommendation_score") or item.get("weight") or 0.0), 4),
                 }
             )
         return result
@@ -808,7 +814,8 @@ class TenderHackApiService:
 
         try:
             profile = self.personalization_service.build_customer_profile(customer_inn=user_inn, top_ste=150)
-            frequent_products = self._load_frequent_products(profile.get("top_ste", [])[:150])
+            recommended_ste = list(profile.get("recommended_ste") or profile.get("top_ste") or [])
+            frequent_products = self._load_frequent_products(recommended_ste[:150])
         except Exception:
             frequent_products = []
 
@@ -884,16 +891,28 @@ class TenderHackApiService:
                 continue
 
             score += min(float(item.get("purchaseCount") or 0), 15.0)
+            score += min(float(item.get("recommendationScore") or 0.0), 12.0)
             if candidate_norm.startswith(query_norm):
                 score += 18.0
             if full_name_norm.startswith(query_norm):
                 score += 10.0
 
+            item_reason = str(item.get("reason") or "")
+            normalized_reason = item_reason.lower()
+            if "учреждени" in normalized_reason:
+                reason = "Часто закупалось"
+            elif "похожих учреждений" in normalized_reason:
+                reason = "Популярно у похожих учреждений"
+            elif "регион" in normalized_reason:
+                reason = "Популярно в регионе"
+            else:
+                reason = "Часто закупалось"
+
             ranked_candidates.append(
                 cls._build_suggestion(
                     text=suggestion_phrase,
                     suggestion_type="product",
-                    reason="Часто закупалось",
+                    reason=reason,
                     score=score + 35.0,
                 )
             )

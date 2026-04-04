@@ -11,6 +11,103 @@ from .text import normalize_text, stem_tokens, tokenize
 
 DEFAULT_PREPROCESSED_DB = Path("data/processed/tenderhack_preprocessed.sqlite")
 
+INSTITUTION_ARCHETYPE_LABELS = {
+    "healthcare": "медицинских учреждений",
+    "education": "образовательных учреждений",
+    "office_admin": "офисно-административных учреждений",
+    "facilities": "эксплуатационно-хозяйственных учреждений",
+    "security_it": "учреждений с повышенным ИТ/безопасностным профилем",
+    "general": "похожих учреждений",
+}
+
+INSTITUTION_ARCHETYPE_KEYWORDS = {
+    "healthcare": {
+        "медицинские",
+        "препарат",
+        "лекарственные",
+        "дезинфицирующие",
+        "санитарно-противоэпидемические",
+        "иммунодепрессанты",
+        "анальгетики",
+        "фармацевтические",
+        "шприцы",
+        "инсулин",
+    },
+    "education": {
+        "обучение",
+        "квалификация",
+        "образование",
+        "учебные",
+        "школьные",
+        "учитель",
+        "педагогические",
+        "воспитание",
+    },
+    "office_admin": {
+        "канцелярские",
+        "бумага",
+        "ручки",
+        "папки",
+        "файлы",
+        "маркеры",
+        "карандаши",
+        "степлеры",
+        "скрепки",
+        "картриджи",
+        "принтеров",
+        "мфу",
+        "документообороту",
+    },
+    "facilities": {
+        "уборочный",
+        "мешки",
+        "бумажные",
+        "туалетная",
+        "мыло",
+        "уборки",
+        "отходами",
+        "ремонту",
+        "строительные",
+        "полотенца",
+        "ветошь",
+    },
+    "security_it": {
+        "пожарной",
+        "безопасности",
+        "охраны",
+        "охранный",
+        "информационной",
+        "техническое",
+        "мониторинг",
+        "технологического",
+        "оборудования",
+        "сертификации",
+    },
+}
+
+ARCHETYPE_CATEGORY_BLEND_WEIGHTS = {
+    "healthcare": {"institution": 4.9, "peer": 2.7, "region": 0.9, "diversity": 0.12},
+    "education": {"institution": 4.5, "peer": 2.5, "region": 1.0, "diversity": 0.12},
+    "office_admin": {"institution": 4.1, "peer": 1.9, "region": 1.7, "diversity": 0.10},
+    "facilities": {"institution": 4.0, "peer": 1.8, "region": 1.9, "diversity": 0.10},
+    "security_it": {"institution": 4.7, "peer": 2.4, "region": 1.0, "diversity": 0.11},
+    "general": {"institution": 4.3, "peer": 2.1, "region": 1.4, "diversity": 0.10},
+}
+
+ARCHETYPE_STE_BLEND_WEIGHTS = {
+    "healthcare": {"institution": 5.2, "peer": 2.6, "region": 0.8, "diversity": 0.10},
+    "education": {"institution": 4.8, "peer": 2.4, "region": 0.9, "diversity": 0.10},
+    "office_admin": {"institution": 4.4, "peer": 1.8, "region": 1.5, "diversity": 0.09},
+    "facilities": {"institution": 4.3, "peer": 1.8, "region": 1.6, "diversity": 0.09},
+    "security_it": {"institution": 4.9, "peer": 2.3, "region": 0.9, "diversity": 0.09},
+    "general": {"institution": 4.6, "peer": 2.0, "region": 1.2, "diversity": 0.09},
+}
+
+ARCHETYPE_KEYWORD_STEMS = {
+    archetype: {stem for keyword in keywords for stem in stem_tokens(tokenize(normalize_text(keyword))) if stem}
+    for archetype, keywords in INSTITUTION_ARCHETYPE_KEYWORDS.items()
+}
+
 
 @dataclass
 class SessionState:
@@ -50,7 +147,9 @@ class PersonalizationService:
         top_customer_categories = self.conn.execute(
             """
             SELECT
+                cc.category_id,
                 cl.category,
+                cl.normalized_category,
                 cc.purchase_count,
                 cc.total_amount,
                 cc.first_purchase_dt,
@@ -68,7 +167,9 @@ class PersonalizationService:
             """
             SELECT
                 cs.ste_id,
+                cs.category_id,
                 cl.category,
+                cl.normalized_category,
                 cs.purchase_count,
                 cs.total_amount,
                 cs.first_purchase_dt,
@@ -87,7 +188,9 @@ class PersonalizationService:
             top_regional_categories = self.conn.execute(
                 """
                 SELECT
+                    rc.category_id,
                     cl.category,
+                    cl.normalized_category,
                     rc.purchase_count,
                     rc.total_amount,
                     rc.first_purchase_dt,
@@ -104,13 +207,57 @@ class PersonalizationService:
         category_preferences = self._weight_category_rows(top_customer_categories)
         ste_preferences = self._weight_ste_rows(top_customer_ste)
         region_preferences = self._weight_category_rows(top_regional_categories)
+        institution_archetype, institution_archetype_scores = self._infer_institution_archetype(category_preferences)
+        top_category_ids = [int(row["category_id"]) for row in top_customer_categories[: min(3, len(top_customer_categories))]]
+        peer_customer_inns = self._load_peer_customer_inns(
+            customer_inn=customer_inn,
+            customer_region=customer_region,
+            category_ids=top_category_ids,
+        )
+        peer_category_preferences = self._weight_category_rows(
+            self._load_peer_category_rows(peer_customer_inns, limit=max(top_categories, top_region_categories))
+        )
+        peer_ste_preferences = self._weight_ste_rows(
+            self._load_peer_ste_rows(peer_customer_inns, limit=max(top_ste, 24))
+        )
+        regional_ste_preferences = self._weight_ste_rows(
+            self._load_regional_ste_rows(
+                customer_region=customer_region,
+                category_ids=top_category_ids,
+                limit=max(top_ste, 24),
+            )
+        )
+        recommended_categories = self._merge_category_preferences(
+            archetype=institution_archetype,
+            institution=category_preferences,
+            peers=peer_category_preferences,
+            region=region_preferences,
+            limit=max(top_categories, top_region_categories),
+        )
+        recommended_ste = self._merge_ste_preferences(
+            archetype=institution_archetype,
+            institution=ste_preferences,
+            peers=peer_ste_preferences,
+            region=regional_ste_preferences,
+            limit=max(top_ste, 24),
+        )
 
         return {
             "customer_inn": customer_inn,
             "customer_region": customer_region,
+            "institution_archetype": institution_archetype,
+            "institution_archetype_label": INSTITUTION_ARCHETYPE_LABELS.get(
+                institution_archetype,
+                INSTITUTION_ARCHETYPE_LABELS["general"],
+            ),
+            "institution_archetype_scores": institution_archetype_scores,
             "top_categories": category_preferences,
             "top_ste": ste_preferences,
             "regional_categories": region_preferences,
+            "peer_categories": peer_category_preferences,
+            "peer_ste": peer_ste_preferences,
+            "recommended_categories": recommended_categories,
+            "recommended_ste": recommended_ste,
             "category_affinity": {item["normalized_category"]: item["weight"] for item in category_preferences},
             "ste_affinity": {item["ste_id"]: item["weight"] for item in ste_preferences},
             "regional_affinity": {item["normalized_category"]: item["weight"] for item in region_preferences},
@@ -131,6 +278,325 @@ class PersonalizationService:
             return None
         return row["customer_region"] if row else None
 
+    @staticmethod
+    def _blend_weights(archetype: str, *, kind: str) -> Dict[str, float]:
+        if kind == "category":
+            return ARCHETYPE_CATEGORY_BLEND_WEIGHTS.get(archetype, ARCHETYPE_CATEGORY_BLEND_WEIGHTS["general"])
+        return ARCHETYPE_STE_BLEND_WEIGHTS.get(archetype, ARCHETYPE_STE_BLEND_WEIGHTS["general"])
+
+    @staticmethod
+    def _match_keyword_stems(category_stems: set[str], keyword_stems: set[str]) -> bool:
+        if not category_stems or not keyword_stems:
+            return False
+        for category_stem in category_stems:
+            for keyword_stem in keyword_stems:
+                if category_stem.startswith(keyword_stem) or keyword_stem.startswith(category_stem):
+                    return True
+        return False
+
+    def _infer_institution_archetype(self, category_preferences: List[Dict[str, object]]) -> tuple[str, Dict[str, float]]:
+        if not category_preferences:
+            return "general", {}
+
+        scores = {archetype: 0.0 for archetype in ARCHETYPE_KEYWORD_STEMS}
+        for item in category_preferences[:8]:
+            normalized_category = str(item.get("normalized_category") or item.get("category") or "")
+            category_stems = set(stem_tokens(tokenize(normalized_category)))
+            if not category_stems:
+                continue
+            signal_strength = float(item.get("weight", 0.0) or 0.0) + min(float(item.get("purchase_count", 0) or 0.0) / 40.0, 2.0)
+            for archetype, keyword_stems in ARCHETYPE_KEYWORD_STEMS.items():
+                if self._match_keyword_stems(category_stems, keyword_stems):
+                    scores[archetype] += signal_strength
+
+        rounded_scores = {key: round(value, 4) for key, value in scores.items() if value > 0}
+        if not rounded_scores:
+            return "general", {}
+
+        archetype, archetype_score = max(scores.items(), key=lambda item: item[1])
+        if archetype_score < 0.75:
+            return "general", rounded_scores
+        return archetype, rounded_scores
+
+    def _load_peer_customer_inns(
+        self,
+        *,
+        customer_inn: str,
+        customer_region: Optional[str],
+        category_ids: List[int],
+        limit: int = 120,
+    ) -> List[str]:
+        if not customer_region or not category_ids:
+            return []
+        placeholders = ", ".join("?" for _ in category_ids)
+        rows = self.conn.execute(
+            f"""
+            SELECT
+                cc.customer_inn,
+                COUNT(DISTINCT cc.category_id) AS overlap_category_count,
+                SUM(cc.purchase_count) AS overlap_purchase_count
+            FROM customer_category_stats cc
+            JOIN customer_region_lookup cr ON cr.customer_inn = cc.customer_inn
+            WHERE cc.customer_inn <> ?
+              AND cr.customer_region = ?
+              AND cc.category_id IN ({placeholders})
+            GROUP BY cc.customer_inn
+            ORDER BY overlap_category_count DESC, overlap_purchase_count DESC, cc.customer_inn ASC
+            LIMIT ?
+            """,
+            [customer_inn, customer_region, *category_ids, limit],
+        ).fetchall()
+        return [str(row["customer_inn"]) for row in rows if row["customer_inn"]]
+
+    def _load_peer_category_rows(self, peer_customer_inns: List[str], *, limit: int) -> List[sqlite3.Row]:
+        if not peer_customer_inns:
+            return []
+        placeholders = ", ".join("?" for _ in peer_customer_inns)
+        return self.conn.execute(
+            f"""
+            SELECT
+                cc.category_id,
+                cl.category,
+                cl.normalized_category,
+                SUM(cc.purchase_count) AS purchase_count,
+                SUM(cc.total_amount) AS total_amount,
+                MIN(cc.first_purchase_dt) AS first_purchase_dt,
+                MAX(cc.last_purchase_dt) AS last_purchase_dt
+            FROM customer_category_stats cc
+            JOIN category_lookup cl ON cl.category_id = cc.category_id
+            WHERE cc.customer_inn IN ({placeholders})
+            GROUP BY cc.category_id, cl.category, cl.normalized_category
+            ORDER BY purchase_count DESC, total_amount DESC
+            LIMIT ?
+            """,
+            [*peer_customer_inns, limit],
+        ).fetchall()
+
+    def _load_peer_ste_rows(self, peer_customer_inns: List[str], *, limit: int) -> List[sqlite3.Row]:
+        if not peer_customer_inns:
+            return []
+        placeholders = ", ".join("?" for _ in peer_customer_inns)
+        return self.conn.execute(
+            f"""
+            SELECT
+                cs.ste_id,
+                cs.category_id,
+                cl.category,
+                cl.normalized_category,
+                SUM(cs.purchase_count) AS purchase_count,
+                SUM(cs.total_amount) AS total_amount,
+                MIN(cs.first_purchase_dt) AS first_purchase_dt,
+                MAX(cs.last_purchase_dt) AS last_purchase_dt
+            FROM customer_ste_stats cs
+            JOIN category_lookup cl ON cl.category_id = cs.category_id
+            WHERE cs.customer_inn IN ({placeholders})
+            GROUP BY cs.ste_id, cs.category_id, cl.category, cl.normalized_category
+            ORDER BY purchase_count DESC, total_amount DESC
+            LIMIT ?
+            """,
+            [*peer_customer_inns, limit],
+        ).fetchall()
+
+    def _load_regional_ste_rows(
+        self,
+        *,
+        customer_region: Optional[str],
+        category_ids: List[int],
+        limit: int,
+    ) -> List[sqlite3.Row]:
+        if not customer_region:
+            return []
+        params: List[object] = [customer_region]
+        category_filter = ""
+        if category_ids:
+            placeholders = ", ".join("?" for _ in category_ids)
+            category_filter = f" AND cs.category_id IN ({placeholders})"
+            params.extend(category_ids)
+        params.append(limit)
+        return self.conn.execute(
+            f"""
+            SELECT
+                cs.ste_id,
+                cs.category_id,
+                cl.category,
+                cl.normalized_category,
+                SUM(cs.purchase_count) AS purchase_count,
+                SUM(cs.total_amount) AS total_amount,
+                MIN(cs.first_purchase_dt) AS first_purchase_dt,
+                MAX(cs.last_purchase_dt) AS last_purchase_dt
+            FROM customer_ste_stats cs
+            JOIN customer_region_lookup cr ON cr.customer_inn = cs.customer_inn
+            JOIN category_lookup cl ON cl.category_id = cs.category_id
+            WHERE cr.customer_region = ?
+            {category_filter}
+            GROUP BY cs.ste_id, cs.category_id, cl.category, cl.normalized_category
+            ORDER BY purchase_count DESC, total_amount DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+
+    @staticmethod
+    def _category_reason(archetype: str, institution_weight: float, peer_weight: float, region_weight: float) -> str:
+        archetype_label = INSTITUTION_ARCHETYPE_LABELS.get(archetype, INSTITUTION_ARCHETYPE_LABELS["general"])
+        if institution_weight > 0 and (peer_weight > 0 or region_weight > 0):
+            return "Часто закупалось учреждением и поддержано региональным спросом"
+        if institution_weight > 0:
+            return "Часто закупалось учреждением"
+        if peer_weight > 0 and region_weight > 0:
+            return f"Популярно у похожих {archetype_label} этого региона"
+        if peer_weight > 0:
+            return f"Популярно у похожих {archetype_label}"
+        return "Популярно в регионе"
+
+    @classmethod
+    def _merge_category_preferences(
+        cls,
+        *,
+        archetype: str,
+        institution: List[Dict[str, object]],
+        peers: List[Dict[str, object]],
+        region: List[Dict[str, object]],
+        limit: int,
+    ) -> List[Dict[str, object]]:
+        merged: Dict[str, Dict[str, object]] = {}
+
+        def upsert(items: List[Dict[str, object]], source: str) -> None:
+            for item in items:
+                normalized_category = str(item.get("normalized_category") or "")
+                if not normalized_category:
+                    continue
+                payload = merged.setdefault(
+                    normalized_category,
+                    {
+                        "category": str(item.get("category") or ""),
+                        "normalized_category": normalized_category,
+                        "purchase_count": 0,
+                        "total_amount": 0.0,
+                        "institution_weight": 0.0,
+                        "peer_weight": 0.0,
+                        "region_weight": 0.0,
+                    },
+                )
+                payload["category"] = payload.get("category") or str(item.get("category") or "")
+                payload["purchase_count"] = max(int(payload.get("purchase_count", 0) or 0), int(item.get("purchase_count") or 0))
+                payload["total_amount"] = max(float(payload.get("total_amount", 0.0) or 0.0), float(item.get("total_amount") or 0.0))
+                payload[f"{source}_weight"] = max(float(payload.get(f"{source}_weight", 0.0) or 0.0), float(item.get("weight") or 0.0))
+
+        upsert(institution, "institution")
+        upsert(peers, "peer")
+        upsert(region, "region")
+
+        ranked: List[Dict[str, object]] = []
+        weights = cls._blend_weights(archetype, kind="category")
+        for payload in merged.values():
+            institution_weight = float(payload.get("institution_weight", 0.0) or 0.0)
+            peer_weight = float(payload.get("peer_weight", 0.0) or 0.0)
+            region_weight = float(payload.get("region_weight", 0.0) or 0.0)
+            recommendation_score = (
+                float(weights["institution"]) * institution_weight
+                + float(weights["peer"]) * peer_weight
+                + float(weights["region"]) * region_weight
+                + float(weights["diversity"]) * sum(1 for value in [institution_weight, peer_weight, region_weight] if value > 0)
+            )
+            payload["recommendation_score"] = round(recommendation_score, 4)
+            payload["reason"] = cls._category_reason(archetype, institution_weight, peer_weight, region_weight)
+            ranked.append(payload)
+
+        ranked.sort(
+            key=lambda item: (
+                float(item.get("recommendation_score", 0.0)),
+                float(item.get("institution_weight", 0.0)),
+                float(item.get("peer_weight", 0.0)),
+                float(item.get("region_weight", 0.0)),
+                int(item.get("purchase_count", 0)),
+            ),
+            reverse=True,
+        )
+        return ranked[:limit]
+
+    @staticmethod
+    def _ste_reason(archetype: str, institution_weight: float, peer_weight: float, region_weight: float) -> str:
+        archetype_label = INSTITUTION_ARCHETYPE_LABELS.get(archetype, INSTITUTION_ARCHETYPE_LABELS["general"])
+        if institution_weight > 0 and (peer_weight > 0 or region_weight > 0):
+            return "Часто закупалось учреждением и встречается в похожем региональном профиле"
+        if institution_weight > 0:
+            return "Часто закупалось учреждением"
+        if peer_weight > 0 and region_weight > 0:
+            return f"Популярно у похожих {archetype_label} региона"
+        if peer_weight > 0:
+            return f"Популярно у похожих {archetype_label}"
+        return "Популярно в регионе"
+
+    @classmethod
+    def _merge_ste_preferences(
+        cls,
+        *,
+        archetype: str,
+        institution: List[Dict[str, object]],
+        peers: List[Dict[str, object]],
+        region: List[Dict[str, object]],
+        limit: int,
+    ) -> List[Dict[str, object]]:
+        merged: Dict[str, Dict[str, object]] = {}
+
+        def upsert(items: List[Dict[str, object]], source: str) -> None:
+            for item in items:
+                ste_id = str(item.get("ste_id") or "")
+                if not ste_id:
+                    continue
+                payload = merged.setdefault(
+                    ste_id,
+                    {
+                        "ste_id": ste_id,
+                        "category": str(item.get("category") or ""),
+                        "normalized_category": str(item.get("normalized_category") or ""),
+                        "purchase_count": 0,
+                        "total_amount": 0.0,
+                        "institution_weight": 0.0,
+                        "peer_weight": 0.0,
+                        "region_weight": 0.0,
+                    },
+                )
+                payload["category"] = payload.get("category") or str(item.get("category") or "")
+                payload["normalized_category"] = payload.get("normalized_category") or str(item.get("normalized_category") or "")
+                payload["purchase_count"] = max(int(payload.get("purchase_count", 0) or 0), int(item.get("purchase_count") or 0))
+                payload["total_amount"] = max(float(payload.get("total_amount", 0.0) or 0.0), float(item.get("total_amount") or 0.0))
+                payload[f"{source}_weight"] = max(float(payload.get(f"{source}_weight", 0.0) or 0.0), float(item.get("weight") or 0.0))
+
+        upsert(institution, "institution")
+        upsert(peers, "peer")
+        upsert(region, "region")
+
+        ranked: List[Dict[str, object]] = []
+        weights = cls._blend_weights(archetype, kind="ste")
+        for payload in merged.values():
+            institution_weight = float(payload.get("institution_weight", 0.0) or 0.0)
+            peer_weight = float(payload.get("peer_weight", 0.0) or 0.0)
+            region_weight = float(payload.get("region_weight", 0.0) or 0.0)
+            recommendation_score = (
+                float(weights["institution"]) * institution_weight
+                + float(weights["peer"]) * peer_weight
+                + float(weights["region"]) * region_weight
+                + float(weights["diversity"]) * sum(1 for value in [institution_weight, peer_weight, region_weight] if value > 0)
+            )
+            payload["weight"] = round(max(institution_weight, peer_weight, region_weight), 4)
+            payload["recommendation_score"] = round(recommendation_score, 4)
+            payload["reason"] = cls._ste_reason(archetype, institution_weight, peer_weight, region_weight)
+            ranked.append(payload)
+
+        ranked.sort(
+            key=lambda item: (
+                float(item.get("recommendation_score", 0.0)),
+                float(item.get("institution_weight", 0.0)),
+                float(item.get("peer_weight", 0.0)),
+                float(item.get("region_weight", 0.0)),
+                int(item.get("purchase_count", 0)),
+            ),
+            reverse=True,
+        )
+        return ranked[:limit]
+
     def _weight_category_rows(self, rows: Iterable[sqlite3.Row]) -> List[Dict[str, object]]:
         rows = list(rows)
         if not rows:
@@ -146,7 +612,8 @@ class PersonalizationService:
             result.append(
                 {
                     "category": row["category"],
-                    "normalized_category": normalize_text(row["category"]),
+                    "normalized_category": str(row["normalized_category"] or normalize_text(row["category"])),
+                    "category_id": int(row["category_id"] or 0) if "category_id" in row.keys() else 0,
                     "purchase_count": int(row["purchase_count"]),
                     "total_amount": round(float(row["total_amount"]), 2),
                     "first_purchase_dt": row["first_purchase_dt"],
@@ -172,7 +639,8 @@ class PersonalizationService:
                 {
                     "ste_id": row["ste_id"],
                     "category": row["category"],
-                    "normalized_category": normalize_text(row["category"]),
+                    "normalized_category": str(row["normalized_category"] or normalize_text(row["category"])),
+                    "category_id": int(row["category_id"] or 0) if "category_id" in row.keys() else 0,
                     "purchase_count": int(row["purchase_count"]),
                     "total_amount": round(float(row["total_amount"]), 2),
                     "first_purchase_dt": row["first_purchase_dt"],

@@ -58,7 +58,9 @@ class QueryAnalysis:
     expanded_tokens: List[str]
     expanded_stems: List[str]
     semantic_expansions: List[str]
+    completion_expansions: List[str]
     applied_corrections: List[Dict[str, str]]
+    applied_completions: List[Dict[str, List[str]]]
     applied_synonyms: List[Dict[str, List[str]]]
     applied_semantic_neighbors: List[Dict[str, object]]
 
@@ -66,6 +68,37 @@ class QueryAnalysis:
 class TypoCorrector:
     def __init__(self, conn: sqlite3.Connection) -> None:
         self.conn = conn
+
+    def completion_candidates(self, token: str, limit: int = 6) -> List[str]:
+        token = token.strip()
+        if len(token) < 3 or token.isdigit():
+            return []
+        exists = self.conn.execute(
+            "SELECT 1 FROM token_frequency WHERE token = ? LIMIT 1",
+            (token,),
+        ).fetchone()
+        if exists and len(token) > 4:
+            return []
+        rows = self.conn.execute(
+            """
+            SELECT token, frequency
+            FROM token_frequency
+            WHERE token LIKE ?
+              AND token_length > ?
+            ORDER BY frequency DESC, token_length ASC, token ASC
+            LIMIT ?
+            """,
+            (f"{token}%", len(token), limit * 3),
+        ).fetchall()
+        completions: List[str] = []
+        for row in rows:
+            candidate = str(row["token"])
+            if not candidate or candidate == token:
+                continue
+            completions.append(candidate)
+            if len(completions) >= limit:
+                break
+        return completions
 
     def _candidate_tokens(self, token: str) -> List[sqlite3.Row]:
         first_char = token[0]
@@ -118,6 +151,9 @@ class TypoCorrector:
         applied: List[Dict[str, str]] = []
         for token in tokens:
             if len(token) <= 2 or token.isdigit():
+                corrected.append(token)
+                continue
+            if self.completion_candidates(token, limit=1):
                 corrected.append(token)
                 continue
             exists = self.conn.execute(
@@ -203,6 +239,17 @@ class SearchService:
             expanded_tokens.extend(tokenize(item))
         return unique_preserve_order(expanded_tokens), applied
 
+    def _expand_completion_tokens(self, corrected_tokens: Iterable[str]) -> tuple[List[str], List[Dict[str, List[str]]]]:
+        expanded: List[str] = []
+        applied: List[Dict[str, List[str]]] = []
+        for token in corrected_tokens:
+            completions = self.corrector.completion_candidates(token)
+            if not completions:
+                continue
+            expanded.extend(completions)
+            applied.append({"source": token, "targets": completions})
+        return unique_preserve_order(expanded), applied
+
     @staticmethod
     def _dedupe_applied_targets(items: List[Dict[str, object]]) -> List[Dict[str, object]]:
         result: List[Dict[str, object]] = []
@@ -237,6 +284,7 @@ class SearchService:
         corrected_tokens = normalize_tokens(corrected_tokens)
         corrected_query = " ".join(corrected_tokens)
 
+        completion_expansions, applied_completions = self._expand_completion_tokens(corrected_tokens)
         corrected_synonym_expansions, corrected_applied_synonyms = self._apply_synonyms(
             corrected_query or normalized_query,
             corrected_tokens,
@@ -244,7 +292,7 @@ class SearchService:
         synonym_expansions = unique_preserve_order(original_synonym_expansions + corrected_synonym_expansions)
         applied_synonyms = self._dedupe_applied_targets(original_applied_synonyms + corrected_applied_synonyms)
         semantic_expansions, applied_semantic_neighbors = self.semantic_expander.expand_tokens(corrected_tokens)
-        merged_tokens = unique_preserve_order(corrected_tokens + synonym_expansions + semantic_expansions)
+        merged_tokens = unique_preserve_order(corrected_tokens + synonym_expansions + completion_expansions + semantic_expansions)
         stemmed_tokens = stem_tokens(corrected_tokens)
         expanded_stems = stem_tokens(merged_tokens)
         return QueryAnalysis(
@@ -257,7 +305,9 @@ class SearchService:
             expanded_tokens=merged_tokens,
             expanded_stems=expanded_stems,
             semantic_expansions=semantic_expansions,
+            completion_expansions=completion_expansions,
             applied_corrections=corrections,
+            applied_completions=applied_completions,
             applied_synonyms=applied_synonyms,
             applied_semantic_neighbors=applied_semantic_neighbors,
         )
@@ -301,6 +351,12 @@ class SearchService:
             (match_query, candidate_limit),
         ).fetchall()
         return rows
+
+    @staticmethod
+    def _needs_broader_retrieval(analysis: QueryAnalysis) -> bool:
+        if analysis.applied_completions:
+            return True
+        return any(len(token) <= 4 and not token.isdigit() for token in analysis.corrected_tokens)
 
     def _score_candidate(self, row: sqlite3.Row, analysis: QueryAnalysis) -> tuple[float, Dict[str, float]]:
         name_tokens = set(tokenize(row["normalized_name"]))
@@ -376,7 +432,8 @@ class SearchService:
 
     def search(self, query: str, top_k: int = 20, candidate_limit: int = 250) -> Dict[str, object]:
         analysis = self.analyze_query(query)
-        candidates = self._fetch_candidates(analysis, candidate_limit=candidate_limit)
+        retrieval_limit = max(candidate_limit, 400) if self._needs_broader_retrieval(analysis) else candidate_limit
+        candidates = self._fetch_candidates(analysis, candidate_limit=retrieval_limit)
         scored_results: List[Dict[str, object]] = []
         for row in candidates:
             lexical_score, features = self._score_candidate(row, analysis)
@@ -410,10 +467,12 @@ class SearchService:
                 "normalized_query": analysis.normalized_query,
                 "corrected_query": analysis.corrected_query,
                 "applied_corrections": analysis.applied_corrections,
+                "applied_completions": analysis.applied_completions,
                 "applied_synonyms": analysis.applied_synonyms,
                 "applied_semantic_neighbors": analysis.applied_semantic_neighbors,
                 "semantic_backend": self.semantic_expander.backend_name,
                 "expanded_tokens": analysis.expanded_tokens,
+                "completion_expansions": analysis.completion_expansions,
                 "semantic_expansions": analysis.semantic_expansions,
             },
             "results": scored_results[:top_k],

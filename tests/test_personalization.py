@@ -86,6 +86,10 @@ class PersonalizationServiceTests(unittest.TestCase):
                 [
                     ("cust-1", 1, 100, 100000.0, "2024-01-01", "2025-01-01"),
                     ("cust-1", 2, 10, 1500.0, "2024-02-01", "2025-02-01"),
+                    ("cust-2", 1, 45, 52000.0, "2024-01-01", "2025-01-01"),
+                    ("cust-2", 3, 70, 68000.0, "2024-02-01", "2025-02-15"),
+                    ("cust-3", 1, 35, 41000.0, "2024-01-01", "2025-01-20"),
+                    ("cust-3", 3, 55, 72000.0, "2024-02-15", "2025-02-20"),
                 ],
             )
             conn.executemany(
@@ -97,6 +101,10 @@ class PersonalizationServiceTests(unittest.TestCase):
                 [
                     ("cust-1", "ste-immune-1", 1, 20, 25000.0, "2024-03-01", "2025-03-01"),
                     ("cust-1", "ste-pen-1", 2, 4, 400.0, "2024-03-01", "2025-03-01"),
+                    ("cust-2", "ste-immune-2", 1, 9, 11000.0, "2024-03-01", "2025-03-01"),
+                    ("cust-2", "ste-printer-1", 3, 18, 28000.0, "2024-03-01", "2025-03-10"),
+                    ("cust-3", "ste-immune-3", 1, 8, 9800.0, "2024-03-01", "2025-03-01"),
+                    ("cust-3", "ste-printer-2", 3, 16, 25000.0, "2024-03-05", "2025-03-12"),
                 ],
             )
             conn.executemany(
@@ -113,6 +121,13 @@ class PersonalizationServiceTests(unittest.TestCase):
             conn.execute(
                 "INSERT INTO customer_region_lookup (customer_inn, customer_region, frequency) VALUES (?, ?, ?)",
                 ("cust-1", "Москва", 12),
+            )
+            conn.executemany(
+                "INSERT INTO customer_region_lookup (customer_inn, customer_region, frequency) VALUES (?, ?, ?)",
+                [
+                    ("cust-2", "Москва", 8),
+                    ("cust-3", "Москва", 7),
+                ],
             )
             conn.commit()
         finally:
@@ -131,8 +146,31 @@ class PersonalizationServiceTests(unittest.TestCase):
     def test_build_customer_profile_infers_region_and_preferences(self) -> None:
         profile = self.service.build_customer_profile("cust-1")
         self.assertEqual(profile["customer_region"], "Москва")
+        self.assertEqual(profile["institution_archetype"], "healthcare")
         self.assertEqual(profile["top_categories"][0]["category"], "ИММУНОДЕПРЕССАНТЫ,L04")
         self.assertEqual(profile["top_ste"][0]["ste_id"], "ste-immune-1")
+
+    def test_build_customer_profile_generates_region_and_peer_backfill_recommendations(self) -> None:
+        profile = self.service.build_customer_profile("cust-1")
+        recommended_categories = profile["recommended_categories"]
+        recommended_ste = profile["recommended_ste"]
+
+        self.assertEqual(recommended_categories[0]["category"], "ИММУНОДЕПРЕССАНТЫ,L04")
+        self.assertTrue(
+            any(
+                item["category"] == "Расходные материалы и комплектующие для лазерных принтеров и МФУ"
+                and "медицин" in str(item.get("reason", "")).lower()
+                for item in recommended_categories
+            )
+        )
+        self.assertEqual(recommended_ste[0]["ste_id"], "ste-immune-1")
+        self.assertTrue(
+            any(
+                item["ste_id"] == "ste-printer-1"
+                and "медицин" in str(item.get("reason", "")).lower()
+                for item in recommended_ste
+            )
+        )
 
     def test_rerank_ste_boosts_matching_history_and_category(self) -> None:
         profile = self.service.build_customer_profile("cust-1")
