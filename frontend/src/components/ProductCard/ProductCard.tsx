@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Product } from '../../types';
 import { useStore } from '../../store/store';
-import { ShoppingCart, Star, X } from 'lucide-react';
+import { ShoppingCart, X } from 'lucide-react';
 
 interface ProductCardProps {
     product: Product;
@@ -10,7 +10,7 @@ interface ProductCardProps {
 
 const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
     const [isOpen, setIsOpen] = useState(false);
-    const { simulateProductOpen, simulateProductClose } = useStore();
+    const { simulateProductOpen, simulateProductClose, addToCart } = useStore();
 
     const handleOpen = () => {
         setIsOpen(true);
@@ -31,6 +31,17 @@ const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
             }
         };
     }, [isOpen, product.id, product.category, simulateProductClose]);
+
+    useEffect(() => {
+        if (!isOpen) {
+            return;
+        }
+        const previousOverflow = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+        return () => {
+            document.body.style.overflow = previousOverflow;
+        };
+    }, [isOpen]);
 
     return (
         <>
@@ -58,7 +69,10 @@ const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
                         {product.price.toLocaleString('ru-RU')} ₽
                     </div>
                     <button 
-                        onClick={(e) => { e.stopPropagation(); /* Add to cart logic */ }}
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            addToCart(product.id, product.category);
+                        }}
                         className="bg-[#E03F3F] hover:bg-red-700 text-white rounded-[4px] w-12 h-12 flex items-center justify-center transition-colors shadow-sm focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
                     >
                         <ShoppingCart size={22} />
@@ -66,8 +80,8 @@ const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
                 </div>
             </div>
 
-            {/* Simulated 'Opened Product' Modal rendered via Portal */}
-            {isOpen && createPortal(
+            {/* Simulated 'Opened Product' Modal */}
+            {isOpen && typeof document !== 'undefined' && createPortal(
                 <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[9999] p-4 backdrop-blur-sm" onClick={handleClose}>
                     <div 
                         className="bg-white w-full max-w-lg rounded-[8px] p-8 relative flex flex-col shadow-2xl"
@@ -78,6 +92,12 @@ const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
                         </button>
                         <div className="text-sm text-gray-500 mb-2 uppercase tracking-wide">{product.category}</div>
                         <h2 className="text-2xl md:text-3xl font-bold mb-6 text-gray-900 leading-tight">{product.name}</h2>
+
+                        {product.descriptionPreview && (
+                            <div className="bg-gray-50 border border-gray-200 rounded p-4 mb-6 text-gray-700 text-sm leading-relaxed">
+                                {product.descriptionPreview}
+                            </div>
+                        )}
                         
                         <div className="bg-blue-50 border border-blue-100 rounded p-4 mb-8 text-blue-800 text-sm">
                             <p className="font-semibold mb-1">Режим имитации пользовательского опыта</p>

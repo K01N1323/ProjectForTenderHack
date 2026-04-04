@@ -6,6 +6,24 @@ const api = axios.create({
     timeout: 15000,
 });
 
+export interface SearchEventPayload {
+    userId?: string;
+    inn?: string;
+    region?: string;
+    eventType:
+        | 'search_result_click'
+        | 'item_open'
+        | 'item_close'
+        | 'bounce'
+        | 'cart_add'
+        | 'cart_remove'
+        | 'purchase'
+        | 'item_click';
+    steId?: string;
+    category?: string;
+    durationMs?: number;
+}
+
 export const searchProducts = async (
     query: string,
     user: User | null,
@@ -41,4 +59,8 @@ export const getSuggestions = async (query: string): Promise<string[]> => {
 export const login = async (inn: string): Promise<User> => {
     const response = await api.post<User>('/api/auth/login', { inn });
     return response.data;
+};
+
+export const sendEvent = async (payload: SearchEventPayload): Promise<void> => {
+    await api.post('/api/event', payload);
 };

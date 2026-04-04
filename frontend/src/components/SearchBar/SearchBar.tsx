@@ -23,12 +23,37 @@ const SearchBar = () => {
     
     // Debounce timer logic
     const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const suggestionRequestRef = useRef(0);
+
+    const loadSuggestions = async (queryToSuggest: string) => {
+        const trimmedQuery = queryToSuggest.trim();
+        const requestId = ++suggestionRequestRef.current;
+
+        if (!trimmedQuery) {
+            setSuggestions([]);
+            return;
+        }
+
+        try {
+            const suggs = await getSuggestions(trimmedQuery);
+            if (suggestionRequestRef.current === requestId) {
+                setSuggestions(suggs);
+            }
+        } catch (error) {
+            console.error(error);
+            if (suggestionRequestRef.current === requestId) {
+                setSuggestions([]);
+            }
+        }
+    };
 
     // Executing full search
     const performSearch = async (queryToSearch: string) => {
         setIsSearching(true);
         setSearchQuery(queryToSearch);
         setIsFocused(false); // Close suggestions on full search
+        suggestionRequestRef.current += 1;
+        setSuggestions([]);
         try {
             const response = await searchProducts(
                 queryToSearch, 
@@ -54,16 +79,8 @@ const SearchBar = () => {
             return;
         }
 
-        timerRef.current = setTimeout(async () => {
-            try {
-                const suggs = await getSuggestions(localQuery);
-                setSuggestions(suggs);
-            } catch (error) {
-                console.error(error);
-                setSuggestions([]);
-            }
-            // Optionally, we could also auto-perform search here if the user stopped typing
-            // For now, let's just show suggestions and let User hit "Enter" or click 'Search'
+        timerRef.current = setTimeout(() => {
+            void loadSuggestions(localQuery);
         }, 300);
 
         return () => {
@@ -89,8 +106,12 @@ const SearchBar = () => {
         }
     };
 
+    const hasFloatingHelper = Boolean(correctedQuery && !isFocused);
+
     return (
-        <div className="relative w-full max-w-4xl mx-auto">
+        <div
+            className={`relative w-full max-w-4xl mx-auto ${hasFloatingHelper ? 'pb-16 md:pb-20' : ''}`}
+        >
             {/* Input Form */}
             <form 
                 onSubmit={handleSearchSubmit} 
@@ -100,8 +121,20 @@ const SearchBar = () => {
                 <input 
                     type="text" 
                     value={localQuery}
-                    onChange={(e) => setLocalQuery(e.target.value)}
-                    onFocus={() => setIsFocused(true)}
+                    onChange={(e) => {
+                        const nextQuery = e.target.value;
+                        setLocalQuery(nextQuery);
+                        setIsFocused(Boolean(nextQuery.trim()));
+                        if (correctedQuery) {
+                            setCorrectedQuery(null);
+                        }
+                    }}
+                    onFocus={() => {
+                        setIsFocused(true);
+                        if (localQuery.trim()) {
+                            void loadSuggestions(localQuery);
+                        }
+                    }}
                     // Delay blur so click on suggestion can register
                     onBlur={() => setTimeout(() => setIsFocused(false), 200)}
                     placeholder="Поиск по классификатору СТЕ..."
@@ -121,7 +154,10 @@ const SearchBar = () => {
                     {suggestions.map((suggestion, idx) => (
                         <div 
                             key={idx}
-                            onClick={() => handleSuggestionClick(suggestion)}
+                            onMouseDown={(e) => {
+                                e.preventDefault();
+                                handleSuggestionClick(suggestion);
+                            }}
                             className="px-6 py-3 cursor-pointer hover:bg-gray-100 flex items-center gap-3 text-lg text-gray-800 transition-colors"
                         >
                             <Search size={18} className="text-gray-400" />
@@ -133,7 +169,7 @@ const SearchBar = () => {
 
             {/* "Did you mean.. / Возможно, вы искали" typo block */}
             {correctedQuery && !isFocused && (
-                <div className="absolute top-[90px] left-8 mt-2 text-gray-700 font-medium z-0 text-lg">
+                <div className="absolute top-[90px] left-8 mt-2 text-gray-700 font-medium z-10 text-lg">
                     Возможно, вы искали: 
                     <span 
                         onClick={handleCorrectedQueryClick}

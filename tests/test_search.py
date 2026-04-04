@@ -122,6 +122,7 @@ class SearchServiceTests(unittest.TestCase):
         self.service = SearchService(
             search_db_path=self.search_db_path,
             synonyms_path=self.synonyms_path,
+            semantic_backend="sqlite",
         )
 
     def tearDown(self) -> None:

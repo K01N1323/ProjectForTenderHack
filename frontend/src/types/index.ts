@@ -11,6 +11,7 @@ export interface Product {
     category: string;
     price: number;
     supplierInn: string;
+    descriptionPreview?: string;
     reasonToShow?: string; 
 }
 

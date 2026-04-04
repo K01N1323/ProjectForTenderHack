@@ -1,6 +1,6 @@
 import React from 'react';
 import SearchBar from '../../components/SearchBar/SearchBar';
-import ProductCard from '../../components/ProductCard/ProductCard';
+import ProductCard from '../../components/ProductCard';
 import { useStore } from '../../store/store';
 import { Loader2 } from 'lucide-react';
 
@@ -12,7 +12,7 @@ const SearchPage = () => {
 
     return (
         <div className="w-full max-w-[1400px] mx-auto px-6 pt-10 pb-20">
-            <div className="flex flex-col items-center mb-16 mt-6">
+            <div className="flex flex-col items-center mb-20 md:mb-24 mt-6">
                 <h1 className="text-4xl md:text-[44px] font-bold text-gray-900 mb-10 text-center tracking-tight">
                     Единый каталог продукции
                 </h1>
@@ -22,7 +22,7 @@ const SearchPage = () => {
                 </div>
             </div>
 
-            <div className="w-full max-w-[1400px] mx-auto relative z-10 mt-10">
+            <div className="w-full max-w-[1400px] mx-auto relative z-0">
                 {isSearching && (
                     <div className="flex flex-col items-center justify-center py-32 text-gray-500">
                         <Loader2 className="animate-spin mb-6 text-[#E03F3F]" size={48} />

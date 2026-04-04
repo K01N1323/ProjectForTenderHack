@@ -6,6 +6,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Dict, Iterable, List
 
+from .cache import CacheService
+
 
 DEFAULT_PREPROCESSED_DB = Path("data/processed/tenderhack_preprocessed.sqlite")
 DEFAULT_CONTRACTS_PATH = Path("Контракты_20260403.csv")
@@ -17,10 +19,17 @@ def _chunked(values: List[str], size: int = 800) -> Iterable[List[str]]:
 
 
 class OfferLookupService:
-    def __init__(self, db_path: Path | str = DEFAULT_PREPROCESSED_DB) -> None:
+    def __init__(
+        self,
+        db_path: Path | str = DEFAULT_PREPROCESSED_DB,
+        cache_service: CacheService | None = None,
+        lookup_ttl_seconds: int = 1800,
+    ) -> None:
         self.db_path = Path(db_path)
-        self.conn = sqlite3.connect(self.db_path)
+        self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
+        self.cache_service = cache_service
+        self.lookup_ttl_seconds = int(lookup_ttl_seconds)
 
     def close(self) -> None:
         self.conn.close()
@@ -40,9 +49,35 @@ class OfferLookupService:
         normalized_ids = [str(value) for value in ste_ids if value]
         if not normalized_ids:
             return {}
+        result: Dict[str, Dict[str, object]] = {}
+        missing_ids: List[str] = []
+
+        if self.cache_service and self.cache_service.enabled:
+            for ste_id in normalized_ids:
+                cache_key = self.cache_service.build_key("offer", suffix=ste_id)
+                cached_value = self.cache_service.get_json(cache_key)
+                if isinstance(cached_value, dict):
+                    result[ste_id] = cached_value
+                else:
+                    missing_ids.append(ste_id)
+        else:
+            missing_ids = normalized_ids
+
+        loaded: Dict[str, Dict[str, object]]
+        if not missing_ids:
+            return result
         if self.has_offer_lookup():
-            return self._load_offer_lookup(normalized_ids)
-        return self._load_estimated_lookup(normalized_ids)
+            loaded = self._load_offer_lookup(missing_ids)
+        else:
+            loaded = self._load_estimated_lookup(missing_ids)
+
+        if self.cache_service and self.cache_service.enabled:
+            for ste_id, payload in loaded.items():
+                cache_key = self.cache_service.build_key("offer", suffix=ste_id)
+                self.cache_service.set_json(cache_key, payload, ttl_seconds=self.lookup_ttl_seconds)
+
+        result.update(loaded)
+        return result
 
     def _load_offer_lookup(self, ste_ids: List[str]) -> Dict[str, Dict[str, object]]:
         result: Dict[str, Dict[str, object]] = {}

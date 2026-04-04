@@ -22,6 +22,16 @@ CYRILLIC_RE = re.compile(r"[А-Яа-яЁё]")
 LATIN_RE = re.compile(r"[A-Za-z]")
 
 
+def _load_fasttext_model_silently(model_path: Path) -> object | None:
+    if fasttext_module is None:
+        return None
+    fasttext_submodule = getattr(fasttext_module, "FastText", None)
+    fasttext_class = getattr(fasttext_submodule, "_FastText", None)
+    if fasttext_class is not None:
+        return fasttext_class(model_path=str(model_path))
+    return fasttext_module.load_model(str(model_path))
+
+
 def char_ngrams(value: str, min_n: int = 3, max_n: int = 5) -> List[str]:
     padded = f"<{value}>"
     ngrams: List[str] = []
@@ -137,7 +147,7 @@ class FastTextSemanticBackend:
         self.enabled = False
         self._sentence_cache: Dict[str, object] = {}
         if fasttext_module is not None and self.model_path.exists():
-            self.model = fasttext_module.load_model(str(self.model_path))
+            self.model = _load_fasttext_model_silently(self.model_path)
             self.enabled = True
 
     def _normalize_neighbor(self, source_token: str, candidate: str) -> str:

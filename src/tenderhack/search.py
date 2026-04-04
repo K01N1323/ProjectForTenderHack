@@ -148,7 +148,7 @@ class SearchService:
     ) -> None:
         self.search_db_path = Path(search_db_path)
         self.synonyms_path = Path(synonyms_path)
-        self.conn = sqlite3.connect(self.search_db_path)
+        self.conn = sqlite3.connect(self.search_db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.corrector = TypoCorrector(self.conn)
         self.synonyms = self._load_synonyms()

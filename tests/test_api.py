@@ -18,10 +18,11 @@ if str(PROJECT_ROOT) not in sys.path:
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from backend.main import AppSettings, create_app
+from backend.main import AppSettings, SearchRequest, create_app
 from scripts.build_search_assets import build_search_db
 from tenderhack.personalization_runtime import PersonalizationRuntimeService
 from tenderhack.search import SearchService
+from tenderhack.text import unique_preserve_order
 
 
 class ApiTests(unittest.TestCase):
@@ -30,6 +31,7 @@ class ApiTests(unittest.TestCase):
         cls.temp_dir = tempfile.TemporaryDirectory()
         base_path = Path(cls.temp_dir.name)
         cls.catalog_path = base_path / "catalog.csv"
+        cls.raw_catalog_path = base_path / "raw_ste.csv"
         cls.search_db_path = base_path / "search.sqlite"
         cls.preprocessed_db_path = base_path / "preprocessed.sqlite"
         cls.synonyms_path = base_path / "synonyms.json"
@@ -82,6 +84,53 @@ class ApiTests(unittest.TestCase):
                     "Дозировка | Форма",
                     "2",
                     "парацетамол таблетки 500 мг анальгетики",
+                ]
+            )
+            writer.writerow(
+                [
+                    "ste-4",
+                    "Ручка офисная красная",
+                    "ручка офисная красная",
+                    "Ручки канцелярские",
+                    "ручки канцелярские",
+                    "Цвет | Тип",
+                    "2",
+                    "ручка офисная красная шариковая",
+                ]
+            )
+
+        with cls.raw_catalog_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.writer(handle, delimiter=";")
+            writer.writerow(
+                [
+                    "ste-1",
+                    "Ручка канцелярская синяя",
+                    "Ручки канцелярские",
+                    "Цвет:синий;Тип:шариковая;Материал:пластик",
+                ]
+            )
+            writer.writerow(
+                [
+                    "ste-2",
+                    "Флеш накопитель 16 ГБ USB 3.0",
+                    "Usb-накопители твердотельные (флеш-драйвы)",
+                    "Объем накопителя:16.00000;Интерфейс подключения:USB 3.0;Цвет:черный",
+                ]
+            )
+            writer.writerow(
+                [
+                    "ste-3",
+                    "Парацетамол таблетки 500 мг №10",
+                    "Анальгетики и антипиретики (n02bg)",
+                    "Дозировка:500 мг;Лекарственная форма:таблетки;Количество в упаковке:10",
+                ]
+            )
+            writer.writerow(
+                [
+                    "ste-4",
+                    "Ручка офисная красная",
+                    "Ручки канцелярские",
+                    "Цвет:красный;Тип:шариковая;Материал:пластик",
                 ]
             )
 
@@ -221,6 +270,7 @@ class ApiTests(unittest.TestCase):
                     ("ste-1", "1234567890", "Москва", 4, 225.0, 199.99, "2025-01-10"),
                     ("ste-2", "5555555555", "Москва", 2, 599.0, 549.0, "2025-01-11"),
                     ("ste-3", "7777777777", "Москва", 3, 120.0, 99.0, "2025-01-12"),
+                    ("ste-4", "8888888888", "Москва", 2, 240.0, 219.0, "2025-01-15"),
                 ],
             )
             conn.commit()
@@ -232,6 +282,8 @@ class ApiTests(unittest.TestCase):
             preprocessed_db_path=cls.preprocessed_db_path,
             synonyms_path=cls.synonyms_path,
             semantic_backend="sqlite",
+            raw_ste_catalog_path=cls.raw_catalog_path,
+            redis_url="memory://",
         )
         cls.client_cm = TestClient(create_app(settings=settings))
         cls.client = cls.client_cm.__enter__()
@@ -248,6 +300,13 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(payload["inn"], "7701234567")
         self.assertEqual(payload["region"], "Москва")
         self.assertTrue(payload["viewedCategories"])
+
+        service = self.client.app.state.service
+        cache_key = service.cache_service.build_key("login", data={"inn": "7701234567"})
+        cached_payload = service.cache_service.get_json(cache_key)
+        self.assertEqual(service.cache_service.backend_name, "memory")
+        self.assertIsInstance(cached_payload, dict)
+        self.assertEqual(cached_payload["inn"], "7701234567")
 
     def test_runtime_personalization_predictor_returns_reason_codes(self) -> None:
         search_service = SearchService(
@@ -275,20 +334,21 @@ class ApiTests(unittest.TestCase):
             runtime_service.close()
 
     def test_search_returns_personalized_product_shape(self) -> None:
+        request_payload = {
+            "query": "канцелярские ручки",
+            "userContext": {
+                "id": "user-7701234567",
+                "inn": "7701234567",
+                "region": "Москва",
+                "viewedCategories": ["Ручки канцелярские"],
+            },
+            "viewedCategories": ["Ручки канцелярские"],
+            "bouncedCategories": [],
+            "topK": 5,
+        }
         response = self.client.post(
             "/api/search",
-            json={
-                "query": "канцелярские ручки",
-                "userContext": {
-                    "id": "user-7701234567",
-                    "inn": "7701234567",
-                    "region": "Москва",
-                    "viewedCategories": ["Ручки канцелярские"],
-                },
-                "viewedCategories": ["Ручки канцелярские"],
-                "bouncedCategories": [],
-                "topK": 5,
-            },
+            json=request_payload,
         )
         self.assertEqual(response.status_code, 200)
         payload = response.json()
@@ -296,7 +356,79 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(payload["items"][0]["id"], "ste-1")
         self.assertEqual(payload["items"][0]["supplierInn"], "1234567890")
         self.assertAlmostEqual(payload["items"][0]["price"], 199.99)
+        self.assertIn("Цвет", payload["items"][0]["descriptionPreview"])
         self.assertEqual(payload["items"][0]["reasonToShow"], "На основе ваших закупок")
+
+        service = self.client.app.state.service
+        server_session = service.online_state_service.get_session_state(
+            user_id="user-7701234567",
+            customer_inn="7701234567",
+            customer_region="Москва",
+        )
+        merged_session = {
+            "recent_categories": unique_preserve_order(
+                list(server_session.get("recent_categories", []))
+                + list(request_payload["viewedCategories"])
+                + list(request_payload["userContext"]["viewedCategories"])
+            ),
+            "clicked_ste_ids": list(server_session.get("clicked_ste_ids", [])),
+            "cart_ste_ids": list(server_session.get("cart_ste_ids", [])),
+            "bounced_categories": list(server_session.get("bounced_categories", [])),
+            "version": int(server_session.get("version", 0) or 0),
+        }
+        cache_key = service.cache_service.build_key(
+            "search",
+            data=service._search_cache_data(
+                SearchRequest(**request_payload),
+                server_session=merged_session,
+            ),
+        )
+        cached_payload = service.cache_service.get_json(cache_key)
+        self.assertIsInstance(cached_payload, dict)
+        self.assertEqual(cached_payload["items"][0]["id"], "ste-1")
+
+    def test_event_updates_session_and_dynamic_search_uses_it(self) -> None:
+        dynamic_user_id = "user-7701234567-dyn"
+        search_payload = {
+            "query": "ручка канцелярская",
+            "userContext": {
+                "id": dynamic_user_id,
+                "inn": "7701234567",
+                "region": "Москва",
+                "viewedCategories": [],
+            },
+            "viewedCategories": [],
+            "bouncedCategories": [],
+            "topK": 5,
+        }
+        baseline = self.client.post("/api/search", json=search_payload)
+        self.assertEqual(baseline.status_code, 200)
+        baseline_items = baseline.json()["items"]
+        self.assertGreaterEqual(len(baseline_items), 2)
+        self.assertEqual(baseline_items[0]["id"], "ste-1")
+
+        event_response = self.client.post(
+            "/api/event",
+            json={
+                "userId": dynamic_user_id,
+                "inn": "7701234567",
+                "region": "Москва",
+                "eventType": "cart_add",
+                "steId": "ste-4",
+                "category": "Ручки канцелярские",
+            },
+        )
+        self.assertEqual(event_response.status_code, 200)
+        event_payload = event_response.json()
+        self.assertGreaterEqual(event_payload["sessionVersion"], 1)
+        self.assertIn("ste-4", event_payload["cartSteIds"])
+
+        reranked = self.client.post("/api/search", json=search_payload)
+        self.assertEqual(reranked.status_code, 200)
+        reranked_items = reranked.json()["items"]
+        self.assertGreaterEqual(len(reranked_items), 2)
+        self.assertEqual(reranked_items[0]["id"], "ste-4")
+        self.assertEqual(reranked_items[0]["reasonToShow"], "Продолжить подбор в этой категории")
 
     def test_search_returns_corrected_query(self) -> None:
         response = self.client.post(
@@ -313,12 +445,13 @@ class ApiTests(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload["correctedQuery"], "парацетамол 500 мг")
 
-    def test_suggestions_return_correction_and_product_name(self) -> None:
+    def test_suggestions_return_correction_and_abstract_phrases(self) -> None:
         response = self.client.get("/api/search/suggestions", params={"q": "флешка"})
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertTrue(payload)
-        self.assertIn("Флеш накопитель 16 ГБ USB 3.0", payload)
+        self.assertIn("флеш накопитель", payload)
+        self.assertNotIn("Флеш накопитель 16 ГБ USB 3.0", payload)
 
 
 if __name__ == "__main__":
