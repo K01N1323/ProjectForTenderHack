@@ -10,7 +10,9 @@ interface CartProps {
 const Cart: React.FC<CartProps> = ({ isOpen, onClose }) => {
     const { cartProducts, removeFromCart, clearCart } = useStore();
 
-    if (!isOpen) return null;
+    if (!isOpen) {
+        return null;
+    }
 
     const total = cartProducts.reduce((sum, product) => sum + (product.price || 0), 0);
 
@@ -36,7 +38,7 @@ const Cart: React.FC<CartProps> = ({ isOpen, onClose }) => {
                         <div className="h-full flex flex-col items-center justify-center text-gray-400 gap-4">
                             <ShoppingBag size={64} strokeWidth={1} />
                             <p className="text-lg">В корзине пока пусто</p>
-                            <button 
+                            <button
                                 onClick={onClose}
                                 className="text-[#da291c] font-semibold hover:underline"
                             >
@@ -56,7 +58,7 @@ const Cart: React.FC<CartProps> = ({ isOpen, onClose }) => {
                                             <div className="font-bold text-[#da291c]">
                                                 {product.price.toLocaleString('ru-RU')} ₽
                                             </div>
-                                            <button 
+                                            <button
                                                 onClick={() => removeFromCart(product.id)}
                                                 className="text-gray-300 hover:text-red-500 transition-colors"
                                                 title="Удалить"
@@ -80,7 +82,7 @@ const Cart: React.FC<CartProps> = ({ isOpen, onClose }) => {
                             </span>
                         </div>
                         <div className="flex flex-col gap-3">
-                            <button 
+                            <button
                                 className="w-full bg-[#da291c] text-white py-4 font-bold hover:bg-red-700 transition-colors shadow-lg shadow-red-200"
                                 onClick={() => {
                                     alert(`Заказ на сумму ${total.toLocaleString('ru-RU')} ₽ успешно оформлен!`);
@@ -90,7 +92,7 @@ const Cart: React.FC<CartProps> = ({ isOpen, onClose }) => {
                             >
                                 Оформить заказ
                             </button>
-                            <button 
+                            <button
                                 onClick={clearCart}
                                 className="w-full text-gray-400 text-sm hover:text-gray-600 transition-colors"
                             >

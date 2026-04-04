@@ -16,6 +16,7 @@ const LoginPage = () => {
 
         setIsLoading(true);
         try {
+            // В реальном приложении здесь будет токен и реальный респонс
             const fakeUser = await login(inn);
             setUser(fakeUser);
             navigate('/');
@@ -28,11 +29,13 @@ const LoginPage = () => {
 
     return (
         <div className="flex items-center justify-center min-h-[calc(100vh-64px)]">
-            <div className="bg-white p-10 md:p-12 w-full max-w-[440px] border border-gray-200 shadow-sm">
+            <div className="bg-white p-10 md:p-12 rounded-[8px] shadow-xl w-full max-w-[440px] border border-transparent">
                 <div className="text-center mb-10">
-                    <img src="/logo.png" alt="Портал Поставщиков" className="h-14 mx-auto mb-6 object-contain" />
-                    <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Вход в систему</h1>
-                    <p className="text-gray-500 mt-2">Портал Поставщиков B2B</p>
+                    <div className="w-16 h-16 bg-[#E03F3F] rounded-[8px] mx-auto flex items-center justify-center text-white font-bold text-4xl mb-6 shadow-md">
+                        П
+                    </div>
+                    <h1 className="text-3xl font-bold text-gray-900 tracking-tight">Вход в систему</h1>
+                    <p className="text-gray-500 mt-2 font-medium">Портал Поставщиков B2B</p>
                 </div>
 
                 <form onSubmit={handleLogin} className="flex flex-col gap-6">
@@ -44,25 +47,17 @@ const LoginPage = () => {
                             value={inn}
                             onChange={(e) => setInnInput(e.target.value)}
                             required
-                            className="w-full px-5 py-3.5 border border-gray-300 focus:border-[#da291c] focus:ring-2 focus:ring-[#da291c33] outline-none transition-all text-base text-gray-900 bg-[#ecedf0] placeholder-gray-500"
+                            className="w-full px-5 py-4 rounded-[4px] border border-gray-300 focus:border-[#E03F3F] focus:ring-2 focus:ring-[#e03f3f33] outline-none transition-all text-base text-gray-900 bg-gray-50 placeholder-gray-400"
                         />
                     </div>
                     
-                    <div className="flex items-center justify-center gap-6 pt-2">
-                        <button 
-                            type="submit"
-                            disabled={isLoading || !inn.trim()}
-                            className="text-gray-500 font-bold text-lg hover:text-gray-700 transition-colors disabled:opacity-50"
-                        >
-                            {isLoading ? <Loader2 size={24} className="animate-spin" /> : "Войти"}
-                        </button>
-                        <button 
-                            type="button"
-                            className="bg-[#da291c] hover:bg-red-700 text-white font-bold py-3.5 px-8 transition-colors text-lg"
-                        >
-                            Зарегистрироваться
-                        </button>
-                    </div>
+                    <button 
+                        type="submit" 
+                        disabled={isLoading || !inn.trim()}
+                        className="w-full bg-[#E03F3F] hover:bg-red-700 disabled:opacity-50 text-white font-bold py-4 px-6 rounded-[4px] transition-colors flex items-center justify-center min-h-[56px] text-lg shadow-md"
+                    >
+                        {isLoading ? <Loader2 size={24} className="animate-spin" /> : "Войти"}
+                    </button>
                 </form>
             </div>
         </div>

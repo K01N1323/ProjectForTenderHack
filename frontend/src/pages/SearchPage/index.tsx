@@ -65,8 +65,8 @@ const SearchPage = () => {
             <div className="w-full relative z-10 mt-10">
                 {showInitialLoader && (
                     <div className="flex flex-col items-center justify-center py-32 text-gray-500">
-                        <Loader2 className="animate-spin mb-6 text-[#da291c]" size={48} />
-                        <p className="text-lg font-medium">Поиск по каталогу...</p>
+                        <Loader2 className="animate-spin mb-6 text-[#E03F3F]" size={48} />
+                        <p className="text-lg font-medium">Интеллектуальный поиск по каталогу...</p>
                     </div>
                 )}
 

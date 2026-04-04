@@ -387,8 +387,6 @@ class ApiTests(unittest.TestCase):
             semantic_backend="sqlite",
             raw_ste_catalog_path=cls.raw_catalog_path,
             redis_url="memory://",
-            search_rerank_model_path=base_path / "missing_yeti.cbm",
-            search_rerank_metadata_path=base_path / "missing_yeti.json",
         )
         cls.client_cm = TestClient(create_app(settings=settings))
         cls.client = cls.client_cm.__enter__()

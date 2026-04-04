@@ -158,8 +158,8 @@ export const useStore = create<StoreState>((set, get) => ({
   addToCart: (product) => {
     const { user } = get();
     set((state) => ({
-      cartProducts: state.cartProducts.some(p => p.id === product.id) 
-        ? state.cartProducts 
+      cartProducts: state.cartProducts.some((item) => item.id === product.id)
+        ? state.cartProducts
         : [...state.cartProducts, product],
       viewedCategories: [...new Set([...state.viewedCategories, product.category])],
     }));
@@ -175,9 +175,9 @@ export const useStore = create<StoreState>((set, get) => ({
 
   removeFromCart: (productId) => {
     const { user, cartProducts } = get();
-    const productToRemove = cartProducts.find(p => p.id === productId);
+    const productToRemove = cartProducts.find((item) => item.id === productId);
     set((state) => ({
-      cartProducts: state.cartProducts.filter(p => p.id !== productId),
+      cartProducts: state.cartProducts.filter((item) => item.id !== productId),
     }));
     if (productToRemove) {
       void sendEvent({
@@ -193,8 +193,7 @@ export const useStore = create<StoreState>((set, get) => ({
 
   clearCart: () => {
     const { user, cartProducts } = get();
-    // Simulate purchase events for all products in cart
-    cartProducts.forEach(product => {
+    cartProducts.forEach((product) => {
       void sendEvent({
         userId: user?.id,
         inn: user?.inn,

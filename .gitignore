@@ -15,8 +15,5 @@ __pycache__/
 # Generated data artifacts
 data/processed/
 reports/
-<<<<<<< HEAD
 
 venv/
-=======
->>>>>>> upstream/main
