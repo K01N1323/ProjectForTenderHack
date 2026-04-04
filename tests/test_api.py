@@ -26,6 +26,10 @@ from tenderhack.text import unique_preserve_order
 
 
 class ApiTests(unittest.TestCase):
+    @staticmethod
+    def _suggestion_texts(payload: list[dict]) -> list[str]:
+        return [str(item.get("text") or "") for item in payload]
+
     @classmethod
     def setUpClass(cls) -> None:
         cls.temp_dir = tempfile.TemporaryDirectory()
@@ -98,6 +102,18 @@ class ApiTests(unittest.TestCase):
                     "ручка офисная красная шариковая",
                 ]
             )
+            writer.writerow(
+                [
+                    "ste-5",
+                    "Труба стальная 20 мм",
+                    "труба стальная 20 мм",
+                    "Трубы стальные",
+                    "трубы стальные",
+                    "Диаметр | Материал",
+                    "2",
+                    "труба стальная 20 мм",
+                ]
+            )
 
         with cls.raw_catalog_path.open("w", encoding="utf-8", newline="") as handle:
             writer = csv.writer(handle, delimiter=";")
@@ -131,6 +147,14 @@ class ApiTests(unittest.TestCase):
                     "Ручка офисная красная",
                     "Ручки канцелярские",
                     "Цвет:красный;Тип:шариковая;Материал:пластик",
+                ]
+            )
+            writer.writerow(
+                [
+                    "ste-5",
+                    "Труба стальная 20 мм",
+                    "Трубы стальные",
+                    "Диаметр:20 мм;Материал:сталь;Тип:круглая",
                 ]
             )
 
@@ -222,6 +246,7 @@ class ApiTests(unittest.TestCase):
                     (1, "Ручки канцелярские", "ручки канцелярские"),
                     (2, "Usb-накопители твердотельные (флеш-драйвы)", "usb накопители твердотельные флеш драйвы"),
                     (3, "Анальгетики и антипиретики (n02bg)", "анальгетики и антипиретики n02bg"),
+                    (4, "Трубы стальные", "трубы стальные"),
                 ],
             )
             conn.executemany(
@@ -271,6 +296,7 @@ class ApiTests(unittest.TestCase):
                     ("ste-2", "5555555555", "Москва", 2, 599.0, 549.0, "2025-01-11"),
                     ("ste-3", "7777777777", "Москва", 3, 120.0, 99.0, "2025-01-12"),
                     ("ste-4", "8888888888", "Москва", 2, 240.0, 219.0, "2025-01-15"),
+                    ("ste-5", "9999999999", "Москва", 5, 820.0, 790.0, "2025-01-20"),
                 ],
             )
             conn.commit()
@@ -284,6 +310,8 @@ class ApiTests(unittest.TestCase):
             semantic_backend="sqlite",
             raw_ste_catalog_path=cls.raw_catalog_path,
             redis_url="memory://",
+            search_rerank_model_path=base_path / "missing_yeti.cbm",
+            search_rerank_metadata_path=base_path / "missing_yeti.json",
         )
         cls.client_cm = TestClient(create_app(settings=settings))
         cls.client = cls.client_cm.__enter__()
@@ -300,9 +328,15 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(payload["inn"], "7701234567")
         self.assertEqual(payload["region"], "Москва")
         self.assertTrue(payload["viewedCategories"])
+        self.assertTrue(payload["topCategories"])
+        self.assertTrue(payload["frequentProducts"])
+        self.assertEqual(payload["frequentProducts"][0]["steId"], "ste-1")
 
         service = self.client.app.state.service
-        cache_key = service.cache_service.build_key("login", data={"inn": "7701234567"})
+        cache_key = service.cache_service.build_key(
+            "login",
+            data={"inn": "7701234567", "version": service.LOGIN_CACHE_VERSION},
+        )
         cached_payload = service.cache_service.get_json(cache_key)
         self.assertEqual(service.cache_service.backend_name, "memory")
         self.assertIsInstance(cached_payload, dict)
@@ -450,8 +484,59 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertTrue(payload)
-        self.assertIn("флеш накопитель", payload)
-        self.assertNotIn("Флеш накопитель 16 ГБ USB 3.0", payload)
+        suggestion_texts = self._suggestion_texts(payload)
+        self.assertIn("флеш накопитель", suggestion_texts)
+        self.assertNotIn("Флеш накопитель 16 ГБ USB 3.0", suggestion_texts)
+        self.assertEqual(payload[0]["type"], "query")
+
+    def test_suggestions_prioritize_purchase_categories_for_user(self) -> None:
+        response = self.client.get(
+            "/api/search/suggestions",
+            params={
+                "q": "руч",
+                "inn": "7701234567",
+                "top_categories": "Ручки канцелярские|Бумага офисная",
+                "viewed_categories": "Ручки канцелярские",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload)
+        suggestion_texts = self._suggestion_texts(payload)
+        self.assertEqual(payload[0]["text"], "Ручка канцелярская синяя")
+        self.assertEqual(payload[0]["type"], "product")
+        self.assertEqual(payload[0]["reason"], "Часто закупалось")
+        self.assertEqual(payload[1]["text"], "ручки канцелярские")
+        self.assertEqual(payload[1]["type"], "category")
+        self.assertIn("ручки канцелярские", suggestion_texts)
+
+    def test_suggestions_include_personalized_products_by_prefix(self) -> None:
+        response = self.client.get(
+            "/api/search/suggestions",
+            params={
+                "q": "пар",
+                "inn": "7701234567",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload)
+        self.assertEqual(payload[0]["text"], "Парацетамол")
+        self.assertEqual(payload[0]["type"], "product")
+
+    def test_suggestions_correct_transposed_typo_to_truba(self) -> None:
+        response = self.client.get(
+            "/api/search/suggestions",
+            params={
+                "q": "турба",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload)
+        self.assertEqual(payload[0]["text"], "труба")
+        self.assertEqual(payload[0]["type"], "correction")
+        self.assertEqual(payload[0]["reason"], "Исправление запроса")
 
 
 if __name__ == "__main__":

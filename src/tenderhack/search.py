@@ -19,6 +19,7 @@ def _edit_distance(left: str, right: str, max_distance: int = 2) -> int:
         return 0
     if abs(len(left) - len(right)) > max_distance:
         return max_distance + 1
+    previous_previous: list[int] | None = None
     previous = list(range(len(right) + 1))
     for i, left_char in enumerate(left, start=1):
         current = [i]
@@ -30,11 +31,19 @@ def _edit_distance(left: str, right: str, max_distance: int = 2) -> int:
                 current[j - 1] + 1,
                 previous[j - 1] + cost,
             )
+            if (
+                previous_previous is not None
+                and i > 1
+                and j > 1
+                and left[i - 1] == right[j - 2]
+                and left[i - 2] == right[j - 1]
+            ):
+                value = min(value, previous_previous[j - 2] + 1)
             current.append(value)
             best = min(best, value)
         if best > max_distance:
             return max_distance + 1
-        previous = current
+        previous_previous, previous = previous, current
     return previous[-1]
 
 

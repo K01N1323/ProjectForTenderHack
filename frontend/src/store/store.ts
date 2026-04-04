@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { User, Product } from '../types';
+import { User, Product, AutocompleteSuggestion } from '../types';
 import { sendEvent } from '../api';
 
 interface StoreState {
@@ -17,13 +17,13 @@ interface StoreState {
   searchQuery: string;
   results: Product[];
   isSearching: boolean;
-  suggestions: string[];
+  suggestions: AutocompleteSuggestion[];
   correctedQuery: string | null;
 
   setSearchQuery: (query: string) => void;
   setResults: (results: Product[]) => void;
   setIsSearching: (isSearching: boolean) => void;
-  setSuggestions: (suggestions: string[]) => void;
+  setSuggestions: (suggestions: AutocompleteSuggestion[]) => void;
   setCorrectedQuery: (query: string | null) => void;
 
   // Actions

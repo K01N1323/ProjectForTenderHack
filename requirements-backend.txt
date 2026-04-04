@@ -2,3 +2,4 @@ fastapi
 uvicorn
 httpx
 redis
+catboost>=1.2,<2.0 ; python_version < "3.13"
