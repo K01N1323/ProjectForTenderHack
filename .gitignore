@@ -8,10 +8,10 @@ __pycache__/
 *.jpg
 *.png
 *.pdf
+!frontend/src/assets/portal-suppliers-logo.jpeg
 СТЕ_*.csv
 Контракты_*.csv
 
 # Generated data artifacts
 data/processed/
 reports/
-

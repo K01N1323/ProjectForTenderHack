@@ -110,14 +110,12 @@ const SearchBar = () => {
 
     return (
         <div
-            className={`relative w-full max-w-4xl mx-auto ${hasFloatingHelper ? 'pb-16 md:pb-20' : ''}`}
+            className={`relative w-full ${hasFloatingHelper ? 'pb-14 md:pb-16' : ''}`}
         >
-            {/* Input Form */}
             <form 
                 onSubmit={handleSearchSubmit} 
-                className="flex items-center bg-white shadow-xl rounded-full p-2 pl-6 relative z-20 border border-transparent focus-within:border-gray-200 transition-all"
+                className="flex items-stretch bg-[#f1f3f6] border border-[#e6e8ec] relative z-20 transition-colors focus-within:border-[#d4d8de]"
             >
-                <Search size={28} className="text-gray-400" />
                 <input 
                     type="text" 
                     value={localQuery}
@@ -137,20 +135,20 @@ const SearchBar = () => {
                     }}
                     // Delay blur so click on suggestion can register
                     onBlur={() => setTimeout(() => setIsFocused(false), 200)}
-                    placeholder="Поиск по классификатору СТЕ..."
-                    className="flex-grow outline-none border-none text-xl text-gray-900 px-6 py-4 bg-transparent placeholder-gray-400"
+                    placeholder="Введите название категории, товара или ID СТЕ"
+                    className="flex-grow outline-none border-none text-[20px] md:text-[22px] text-gray-900 px-7 py-5 bg-transparent placeholder-[#7d8390]"
                 />
                 <button 
                     type="submit" 
-                    className="bg-[#E03F3F] hover:bg-red-700 text-white px-10 py-4 rounded-full font-bold text-lg transition-colors flex-shrink-0"
+                    className="bg-[#d63d2b] hover:bg-[#bf3324] text-white w-[68px] md:w-[72px] flex items-center justify-center transition-colors flex-shrink-0"
+                    aria-label="Запустить поиск"
                 >
-                    Найти
+                    <Search size={30} strokeWidth={2} />
                 </button>
             </form>
 
-            {/* Suggestions Dropdown */}
             {isFocused && suggestions.length > 0 && (
-                <div className="absolute top-[80px] left-0 w-full bg-white shadow-lg rounded-xl border border-gray-100 mt-2 z-10 overflow-hidden py-2 hidden md:block">
+                <div className="absolute top-[76px] left-0 w-full bg-white shadow-lg border border-[#e6e8ec] mt-2 z-20 overflow-hidden py-2 hidden md:block">
                     {suggestions.map((suggestion, idx) => (
                         <div 
                             key={idx}
@@ -158,7 +156,7 @@ const SearchBar = () => {
                                 e.preventDefault();
                                 handleSuggestionClick(suggestion);
                             }}
-                            className="px-6 py-3 cursor-pointer hover:bg-gray-100 flex items-center gap-3 text-lg text-gray-800 transition-colors"
+                            className="px-6 py-3 cursor-pointer hover:bg-[#f4f6f8] flex items-center gap-3 text-[18px] text-gray-800 transition-colors"
                         >
                             <Search size={18} className="text-gray-400" />
                             {suggestion}
@@ -167,9 +165,8 @@ const SearchBar = () => {
                 </div>
             )}
 
-            {/* "Did you mean.. / Возможно, вы искали" typo block */}
             {correctedQuery && !isFocused && (
-                <div className="absolute top-[90px] left-8 mt-2 text-gray-700 font-medium z-10 text-lg">
+                <div className="absolute top-[84px] left-0 mt-2 text-gray-700 font-medium z-10 text-base md:text-lg">
                     Возможно, вы искали: 
                     <span 
                         onClick={handleCorrectedQueryClick}
