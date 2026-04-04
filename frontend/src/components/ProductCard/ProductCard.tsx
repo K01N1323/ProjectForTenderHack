@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { Product } from '../../types';
 import { useStore } from '../../store/store';
 import { ShoppingCart, Star, X } from 'lucide-react';
@@ -65,9 +66,9 @@ const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
                 </div>
             </div>
 
-            {/* Simulated 'Opened Product' Modal */}
-            {isOpen && (
-                <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm" onClick={handleClose}>
+            {/* Simulated 'Opened Product' Modal rendered via Portal */}
+            {isOpen && createPortal(
+                <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[9999] p-4 backdrop-blur-sm" onClick={handleClose}>
                     <div 
                         className="bg-white w-full max-w-lg rounded-[8px] p-8 relative flex flex-col shadow-2xl"
                         onClick={e => e.stopPropagation()}
@@ -87,7 +88,8 @@ const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
                             {product.price.toLocaleString('ru-RU')} ₽
                         </div>
                     </div>
-                </div>
+                </div>,
+                document.body
             )}
         </>
     );
