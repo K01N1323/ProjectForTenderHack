@@ -23,6 +23,16 @@ DEFAULT_SEARCH_DB = Path("data/processed/tenderhack_search.sqlite")
 DEFAULT_SYNONYMS_PATH = Path("data/reference/search_synonyms.json")
 
 
+def _token_sequence_contains(tokens: List[str], phrase_tokens: List[str]) -> bool:
+    if not tokens or not phrase_tokens or len(phrase_tokens) > len(tokens):
+        return False
+    phrase_length = len(phrase_tokens)
+    for index in range(len(tokens) - phrase_length + 1):
+        if tokens[index : index + phrase_length] == phrase_tokens:
+            return True
+    return False
+
+
 def _edit_distance(left: str, right: str, max_distance: int = 2) -> int:
     if left == right:
         return 0
@@ -233,9 +243,11 @@ class SearchService:
         applied: List[Dict[str, List[str]]] = []
         phrase_synonyms = self.synonyms["phrase_synonyms"]
         token_synonyms = self.synonyms["token_synonyms"]
+        query_tokens = normalize_tokens(tokenize(normalized_query))
 
         for phrase, replacements in phrase_synonyms.items():
-            if phrase and phrase in normalized_query:
+            phrase_tokens = normalize_tokens(tokenize(phrase))
+            if phrase_tokens and _token_sequence_contains(query_tokens, phrase_tokens):
                 expanded.extend(replacements)
                 applied.append({"source": phrase, "targets": replacements})
 
@@ -279,8 +291,6 @@ class SearchService:
         normalized_query = normalize_text(query)
         original_tokens = normalize_tokens(tokenize(normalized_query))
 
-        original_synonym_expansions, original_applied_synonyms = self._apply_synonyms(normalized_query, original_tokens)
-
         corrected_tokens: List[str] = []
         corrections: List[Dict[str, str]] = []
         synonym_keys = set(self.synonyms["token_synonyms"].keys())
@@ -296,12 +306,9 @@ class SearchService:
         corrected_query = " ".join(corrected_tokens)
 
         completion_expansions, applied_completions = self._expand_completion_tokens(corrected_tokens)
-        corrected_synonym_expansions, corrected_applied_synonyms = self._apply_synonyms(
-            corrected_query or normalized_query,
-            corrected_tokens,
-        )
-        synonym_expansions = unique_preserve_order(original_synonym_expansions + corrected_synonym_expansions)
-        applied_synonyms = self._dedupe_applied_targets(original_applied_synonyms + corrected_applied_synonyms)
+        expansion_query = corrected_query or normalized_query
+        synonym_expansions, applied_synonyms = self._apply_synonyms(expansion_query, corrected_tokens)
+        applied_synonyms = self._dedupe_applied_targets(applied_synonyms)
         semantic_expansions, applied_semantic_neighbors = self.semantic_expander.expand_tokens(corrected_tokens)
         merged_tokens = unique_preserve_order(corrected_tokens + synonym_expansions + completion_expansions + semantic_expansions)
         stemmed_tokens = stem_tokens(corrected_tokens)

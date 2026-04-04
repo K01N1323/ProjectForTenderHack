@@ -228,6 +228,22 @@ class SearchServiceTests(unittest.TestCase):
         self.assertFalse(payload["has_more"])
         self.assertEqual(len(payload["results"]), 1)
 
+    def test_phrase_synonym_does_not_match_inside_larger_token(self) -> None:
+        payload = self.service.search("суперфлешка", top_k=3, min_score=0.0)
+        self.assertFalse(payload["query"]["applied_synonyms"])
+
+    def test_typo_query_does_not_keep_original_misspelled_token_in_expansions(self) -> None:
+        payload = self.service.search("парацетомол 500 мг", top_k=3, min_score=0.0)
+        self.assertIn("парацетамол", payload["query"]["expanded_tokens"])
+        self.assertNotIn("парацетомол", payload["query"]["expanded_tokens"])
+
+    def test_sqlite_semantic_backend_exposes_sentence_similarity_signal(self) -> None:
+        similarity = self.service.semantic_expander.sentence_similarity(
+            "мфу лазерное",
+            "многофункциональное устройство лазерное",
+        )
+        self.assertGreater(similarity, 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -60,7 +60,14 @@ def evaluate_grouped_rows(rows: Iterable[dict[str, object]]) -> dict[str, float]
     recall_10 = 0.0
     hitrate_10 = 0.0
     for group_rows in groups.values():
-        ranked = sorted(group_rows, key=lambda row: (float(row["score"]), float(row["label"])), reverse=True)
+        ranked = sorted(
+            group_rows,
+            key=lambda row: (
+                float(row["score"]),
+                str(row.get("candidate_ste_id", "")),
+            ),
+            reverse=True,
+        )
         labels = [float(row["label"]) for row in ranked]
         ndcg_5 += _ndcg(labels, 5)
         ndcg_10 += _ndcg(labels, 10)
