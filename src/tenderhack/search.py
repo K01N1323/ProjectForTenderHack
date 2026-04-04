@@ -1,13 +1,22 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List
 
 from .semantic import DEFAULT_FASTTEXT_MODEL_PATH, SemanticExpander
-from .text import normalize_text, normalize_tokens, stem_token, stem_tokens, tokenize, unique_preserve_order
+from .text import (
+    extract_attribute_spans,
+    normalize_text,
+    normalize_tokens,
+    stem_token,
+    stem_tokens,
+    tokenize,
+    unique_preserve_order,
+)
 
 
 DEFAULT_SEARCH_DB = Path("data/processed/tenderhack_search.sqlite")
@@ -19,6 +28,7 @@ def _edit_distance(left: str, right: str, max_distance: int = 2) -> int:
         return 0
     if abs(len(left) - len(right)) > max_distance:
         return max_distance + 1
+    previous_previous: list[int] | None = None
     previous = list(range(len(right) + 1))
     for i, left_char in enumerate(left, start=1):
         current = [i]
@@ -30,11 +40,19 @@ def _edit_distance(left: str, right: str, max_distance: int = 2) -> int:
                 current[j - 1] + 1,
                 previous[j - 1] + cost,
             )
+            if (
+                previous_previous is not None
+                and i > 1
+                and j > 1
+                and left[i - 1] == right[j - 2]
+                and left[i - 2] == right[j - 1]
+            ):
+                value = min(value, previous_previous[j - 2] + 1)
             current.append(value)
             best = min(best, value)
         if best > max_distance:
             return max_distance + 1
-        previous = current
+        previous_previous, previous = previous, current
     return previous[-1]
 
 
@@ -49,14 +67,49 @@ class QueryAnalysis:
     expanded_tokens: List[str]
     expanded_stems: List[str]
     semantic_expansions: List[str]
+    completion_expansions: List[str]
     applied_corrections: List[Dict[str, str]]
+    applied_completions: List[Dict[str, List[str]]]
     applied_synonyms: List[Dict[str, List[str]]]
     applied_semantic_neighbors: List[Dict[str, object]]
+    # Structured attribute pairs extracted from the query, e.g. [("500", "мг"), ("16", "гб")]
+    attribute_spans: List[tuple]
 
 
 class TypoCorrector:
     def __init__(self, conn: sqlite3.Connection) -> None:
         self.conn = conn
+
+    def completion_candidates(self, token: str, limit: int = 6) -> List[str]:
+        token = token.strip()
+        if len(token) < 3 or token.isdigit():
+            return []
+        exists = self.conn.execute(
+            "SELECT 1 FROM token_frequency WHERE token = ? LIMIT 1",
+            (token,),
+        ).fetchone()
+        if exists and len(token) > 4:
+            return []
+        rows = self.conn.execute(
+            """
+            SELECT token, frequency
+            FROM token_frequency
+            WHERE token LIKE ?
+              AND token_length > ?
+            ORDER BY frequency DESC, token_length ASC, token ASC
+            LIMIT ?
+            """,
+            (f"{token}%", len(token), limit * 3),
+        ).fetchall()
+        completions: List[str] = []
+        for row in rows:
+            candidate = str(row["token"])
+            if not candidate or candidate == token:
+                continue
+            completions.append(candidate)
+            if len(completions) >= limit:
+                break
+        return completions
 
     def _candidate_tokens(self, token: str) -> List[sqlite3.Row]:
         first_char = token[0]
@@ -109,6 +162,9 @@ class TypoCorrector:
         applied: List[Dict[str, str]] = []
         for token in tokens:
             if len(token) <= 2 or token.isdigit():
+                corrected.append(token)
+                continue
+            if self.completion_candidates(token, limit=1):
                 corrected.append(token)
                 continue
             exists = self.conn.execute(
@@ -194,6 +250,17 @@ class SearchService:
             expanded_tokens.extend(tokenize(item))
         return unique_preserve_order(expanded_tokens), applied
 
+    def _expand_completion_tokens(self, corrected_tokens: Iterable[str]) -> tuple[List[str], List[Dict[str, List[str]]]]:
+        expanded: List[str] = []
+        applied: List[Dict[str, List[str]]] = []
+        for token in corrected_tokens:
+            completions = self.corrector.completion_candidates(token)
+            if not completions:
+                continue
+            expanded.extend(completions)
+            applied.append({"source": token, "targets": completions})
+        return unique_preserve_order(expanded), applied
+
     @staticmethod
     def _dedupe_applied_targets(items: List[Dict[str, object]]) -> List[Dict[str, object]]:
         result: List[Dict[str, object]] = []
@@ -228,6 +295,7 @@ class SearchService:
         corrected_tokens = normalize_tokens(corrected_tokens)
         corrected_query = " ".join(corrected_tokens)
 
+        completion_expansions, applied_completions = self._expand_completion_tokens(corrected_tokens)
         corrected_synonym_expansions, corrected_applied_synonyms = self._apply_synonyms(
             corrected_query or normalized_query,
             corrected_tokens,
@@ -235,9 +303,11 @@ class SearchService:
         synonym_expansions = unique_preserve_order(original_synonym_expansions + corrected_synonym_expansions)
         applied_synonyms = self._dedupe_applied_targets(original_applied_synonyms + corrected_applied_synonyms)
         semantic_expansions, applied_semantic_neighbors = self.semantic_expander.expand_tokens(corrected_tokens)
-        merged_tokens = unique_preserve_order(corrected_tokens + synonym_expansions + semantic_expansions)
+        merged_tokens = unique_preserve_order(corrected_tokens + synonym_expansions + completion_expansions + semantic_expansions)
         stemmed_tokens = stem_tokens(corrected_tokens)
         expanded_stems = stem_tokens(merged_tokens)
+        # Extract structured attribute spans (value+unit pairs) from the original query
+        attribute_spans = extract_attribute_spans(query)
         return QueryAnalysis(
             original_query=query,
             normalized_query=normalized_query,
@@ -248,9 +318,12 @@ class SearchService:
             expanded_tokens=merged_tokens,
             expanded_stems=expanded_stems,
             semantic_expansions=semantic_expansions,
+            completion_expansions=completion_expansions,
             applied_corrections=corrections,
+            applied_completions=applied_completions,
             applied_synonyms=applied_synonyms,
             applied_semantic_neighbors=applied_semantic_neighbors,
+            attribute_spans=attribute_spans,
         )
 
     def _build_match_query(self, analysis: QueryAnalysis) -> str:
@@ -293,6 +366,61 @@ class SearchService:
         ).fetchall()
         return rows
 
+    @staticmethod
+    def _needs_broader_retrieval(analysis: QueryAnalysis) -> bool:
+        if analysis.applied_completions:
+            return True
+        return any(len(token) <= 4 and not token.isdigit() for token in analysis.corrected_tokens)
+
+    @staticmethod
+    def _compute_attribute_score(row: sqlite3.Row, analysis: QueryAnalysis) -> float:
+        """Score bonus/penalty based on structured attribute matching.
+
+        Strategy:
+        - For each (value, unit) pair from the query:
+            - Check the candidate's normalized_name + attribute_keys for the
+              pair and for *any* other value with the same unit.
+            - +5.0 exact value+unit match in name/keys
+            - +2.0 value appears anywhere in name (unit match not needed)
+            - -3.0 same unit present but a *different* numeric value is adjacent
+              (e.g. query asks 500мг but candidate says 250мг)
+        - Cap total penalty to avoid burying otherwise-good candidates.
+        """
+        if not analysis.attribute_spans:
+            return 0.0
+
+        candidate_text = " ".join(filter(None, [
+            row["normalized_name"] or "",
+            row["attribute_keys"] or "",
+        ])).lower()
+
+        total = 0.0
+        for value, unit in analysis.attribute_spans:
+            # Build pattern to find unit with its adjacent number in the candidate
+            unit_re = re.compile(
+                r"(\d+(?:[.,]\d+)?)\s*" + re.escape(unit) + r"\b",
+                re.IGNORECASE,
+            )
+            matches_in_candidate = unit_re.findall(candidate_text)
+
+            if matches_in_candidate:
+                # Normalise candidate values (replace comma decimal separator)
+                candidate_values = [v.replace(",", ".") for v in matches_in_candidate]
+                if value in candidate_values:
+                    # Exact match — strong boost
+                    total += 5.0
+                else:
+                    # Same unit, different value — penalise
+                    total -= 3.0
+            else:
+                # Unit not found in candidate — check whether the bare value is
+                # present (could be written differently)
+                if re.search(r"\b" + re.escape(value) + r"\b", candidate_text):
+                    total += 2.0
+
+        # Never let attribute penalty alone push score to extremely negative
+        return max(total, -6.0)
+
     def _score_candidate(self, row: sqlite3.Row, analysis: QueryAnalysis) -> tuple[float, Dict[str, float]]:
         name_tokens = set(tokenize(row["normalized_name"]))
         category_tokens = set(tokenize(row["normalized_category"]))
@@ -324,6 +452,7 @@ class SearchService:
             semantic_query,
             f"{row['normalized_name']} {row['normalized_category']} {row['key_tokens']}",
         )
+        attribute_score = self._compute_attribute_score(row, analysis)
 
         coverage_denominator = max(1, len(corrected_set))
         stem_denominator = max(1, len(stem_set))
@@ -347,6 +476,7 @@ class SearchService:
         score += 1.5 * synonym_bonus
         score += 3.0 * semantic_vector_similarity
         score += 2.0 * bm25_component
+        score += attribute_score  # structured attribute bonus/penalty
 
         features = {
             "exact_phrase": round(exact_phrase, 4),
@@ -362,12 +492,47 @@ class SearchService:
             "semantic_vector_similarity": round(semantic_vector_similarity, 4),
             "synonym_bonus": round(synonym_bonus, 4),
             "bm25_component": round(bm25_component, 4),
+            "attribute_score": round(attribute_score, 4),
         }
         return score, features
 
-    def search(self, query: str, top_k: int = 20, candidate_limit: int = 250) -> Dict[str, object]:
+    @staticmethod
+    def _semantic_score(item: Dict[str, object]) -> float:
+        search_features = dict(item.get("search_features") or {})
+        return max(
+            float(search_features.get("semantic_vector_similarity", 0.0) or 0.0),
+            float(search_features.get("semantic_name_overlap", 0.0) or 0.0),
+            float(search_features.get("semantic_category_overlap", 0.0) or 0.0),
+            float(search_features.get("semantic_key_overlap", 0.0) or 0.0),
+        )
+
+    @classmethod
+    def _passes_min_score(cls, item: Dict[str, object], min_score: float) -> bool:
+        search_features = dict(item.get("search_features") or {})
+        semantic_score = cls._semantic_score(item)
+        exact_lexical_match = max(
+            float(search_features.get("exact_phrase", 0.0) or 0.0),
+            float(search_features.get("full_name_cover", 0.0) or 0.0),
+            float(search_features.get("full_category_cover", 0.0) or 0.0),
+            float(search_features.get("corrected_token_overlap", 0.0) or 0.0),
+        )
+        # We cut low-confidence semantic noise, but we keep exact lexical hits:
+        # model numbers, article codes and short catalog queries are often valid
+        # even when the semantic backend gives them a low vector similarity.
+        return semantic_score >= min_score or exact_lexical_match >= 1.0
+
+    def search(
+        self,
+        query: str,
+        top_k: int = 20,
+        candidate_limit: int = 250,
+        limit: int | None = None,
+        offset: int = 0,
+        min_score: float = 0.55,
+    ) -> Dict[str, object]:
         analysis = self.analyze_query(query)
-        candidates = self._fetch_candidates(analysis, candidate_limit=candidate_limit)
+        retrieval_limit = max(candidate_limit, 400) if self._needs_broader_retrieval(analysis) else candidate_limit
+        candidates = self._fetch_candidates(analysis, candidate_limit=retrieval_limit)
         scored_results: List[Dict[str, object]] = []
         for row in candidates:
             lexical_score, features = self._score_candidate(row, analysis)
@@ -381,6 +546,15 @@ class SearchService:
                     "attribute_keys": row["attribute_keys"],
                     "attribute_count": int(row["attribute_count"] or 0),
                     "key_tokens": row["key_tokens"],
+                    "semantic_score": round(
+                        max(
+                            float(features.get("semantic_vector_similarity", 0.0) or 0.0),
+                            float(features.get("semantic_name_overlap", 0.0) or 0.0),
+                            float(features.get("semantic_category_overlap", 0.0) or 0.0),
+                            float(features.get("semantic_key_overlap", 0.0) or 0.0),
+                        ),
+                        4,
+                    ),
                     "search_score": round(lexical_score, 4),
                     "search_features": features,
                 }
@@ -395,28 +569,36 @@ class SearchService:
             ),
             reverse=True,
         )
+        filtered_results = [item for item in scored_results if self._passes_min_score(item, min_score)]
+        page_limit = max(1, limit or top_k)
+        paginated_results = filtered_results[offset : offset + page_limit]
         return {
             "query": {
                 "original_query": analysis.original_query,
                 "normalized_query": analysis.normalized_query,
                 "corrected_query": analysis.corrected_query,
                 "applied_corrections": analysis.applied_corrections,
+                "applied_completions": analysis.applied_completions,
                 "applied_synonyms": analysis.applied_synonyms,
                 "applied_semantic_neighbors": analysis.applied_semantic_neighbors,
                 "semantic_backend": self.semantic_expander.backend_name,
                 "expanded_tokens": analysis.expanded_tokens,
+                "completion_expansions": analysis.completion_expansions,
                 "semantic_expansions": analysis.semantic_expansions,
             },
-            "results": scored_results[:top_k],
+            "results": paginated_results,
+            "total_found": len(filtered_results),
+            "has_more": offset + page_limit < len(filtered_results),
         }
 
-    def search_ste(self, query: str, top_k: int = 20) -> List[Dict[str, object]]:
-        return self.search(query, top_k=top_k)["results"]
+    def search_ste(self, query: str, top_k: int = 20, min_score: float = 0.55) -> List[Dict[str, object]]:
+        return self.search(query, top_k=top_k, min_score=min_score)["results"]
 
 
 def search_ste(
     query: str,
     top_k: int = 20,
+    min_score: float = 0.55,
     search_db_path: Path | str = DEFAULT_SEARCH_DB,
     synonyms_path: Path | str = DEFAULT_SYNONYMS_PATH,
     semantic_backend: str = "auto",
@@ -429,6 +611,6 @@ def search_ste(
         fasttext_model_path=fasttext_model_path,
     )
     try:
-        return service.search_ste(query=query, top_k=top_k)
+        return service.search_ste(query=query, top_k=top_k, min_score=min_score)
     finally:
         service.close()
