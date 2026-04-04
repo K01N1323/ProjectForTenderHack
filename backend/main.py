@@ -369,7 +369,9 @@ class TenderHackApiService:
             )
         else:
             for item in results:
+                item["session_priority"] = 0.0
                 item["final_score"] = item.get("search_score", 0.0)
+                item["history_priority"] = 0.0
                 item["top_reason_codes"] = []
                 item["reasons"] = ["оставлено выше за счёт базовой текстовой релевантности"]
 
@@ -381,7 +383,10 @@ class TenderHackApiService:
 
         results.sort(
             key=lambda item: (
+                float(item.get("session_priority", 0.0)),
+                float(item.get("history_priority", 0.0)),
                 float(item.get("final_score", item.get("search_score", 0.0))),
+                float(item.get("personalization_score", 0.0)),
                 float(item.get("search_score", 0.0)),
             ),
             reverse=True,

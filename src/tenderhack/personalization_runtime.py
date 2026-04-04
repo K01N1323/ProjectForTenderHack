@@ -14,6 +14,12 @@ from tenderhack.text import normalize_text, unique_preserve_order
 
 DEFAULT_PREPROCESSED_DB = Path("data/processed/tenderhack_preprocessed.sqlite")
 DEFAULT_PERSONALIZATION_MODEL_PATH = Path("artifacts/personalization_model.cbm")
+HISTORY_REASON_PRIORITIES = {
+    "USER_REPEAT_BUY": 4.0,
+    "RECENT_SIMILAR_PURCHASE": 3.0,
+    "USER_CATEGORY_AFFINITY": 2.0,
+    "SUPPLIER_AFFINITY": 1.0,
+}
 
 
 def _chunked(values: List[str], size: int = 400) -> Iterable[List[str]]:
@@ -117,11 +123,18 @@ class PersonalizationRuntimeService:
                 candidate=candidate,
                 session_state=active_session_state,
             )
+            session_priority = self._session_priority(dynamic_reason_codes)
             reason_codes = unique_preserve_order(
                 [str(code) for code in prediction.get("top_reason_codes", [])] + dynamic_reason_codes
             )
             reasons = unique_preserve_order(
                 [str(text) for text in prediction.get("reasons", [])] + dynamic_reasons
+            )
+            history_priority = self._history_priority(
+                candidate=candidate,
+                user_profile=user_profile,
+                reference_date=active_date,
+                reason_codes=reason_codes,
             )
             final_score = (
                 float(candidate.get("search_score", 0.0))
@@ -132,6 +145,8 @@ class PersonalizationRuntimeService:
             enriched["base_search_rank"] = index
             enriched["personalization_score"] = round(personalization_score, 6)
             enriched["dynamic_session_score"] = round(dynamic_score, 6)
+            enriched["session_priority"] = round(session_priority, 4)
+            enriched["history_priority"] = round(history_priority, 4)
             enriched["top_reason_codes"] = reason_codes
             enriched["reasons"] = reasons
             enriched["final_score"] = round(final_score, 6)
@@ -139,6 +154,8 @@ class PersonalizationRuntimeService:
 
         reranked.sort(
             key=lambda item: (
+                float(item.get("session_priority", 0.0)),
+                float(item.get("history_priority", 0.0)),
                 float(item.get("final_score", item.get("search_score", 0.0))),
                 float(item.get("personalization_score", 0.0)),
                 float(item.get("search_score", 0.0)),
@@ -146,6 +163,75 @@ class PersonalizationRuntimeService:
             reverse=True,
         )
         return reranked
+
+    def _history_priority(
+        self,
+        *,
+        candidate: Dict[str, object],
+        user_profile: Dict[str, object],
+        reference_date: date,
+        reason_codes: List[str],
+    ) -> float:
+        priority = 0.0
+
+        ste_id = str(candidate.get("ste_id") or candidate.get("candidate_id") or "")
+        category = str(candidate.get("category") or "")
+        supplier_inn = str(candidate.get("candidate_primary_supplier_inn") or "")
+
+        ste_counts = {str(key): int(value) for key, value in dict(user_profile.get("ste_counts", {})).items()}
+        category_counts = {str(key): int(value) for key, value in dict(user_profile.get("category_counts", {})).items()}
+        supplier_counts = {str(key): int(value) for key, value in dict(user_profile.get("supplier_counts", {})).items()}
+
+        last_ste_purchase_dt = {
+            str(key): _parse_iso_date(value)
+            for key, value in dict(user_profile.get("last_ste_purchase_dt", {})).items()
+        }
+        last_category_purchase_dt = {
+            str(key): _parse_iso_date(value)
+            for key, value in dict(user_profile.get("last_category_purchase_dt", {})).items()
+        }
+
+        ste_purchase_count = ste_counts.get(ste_id, 0)
+        if ste_purchase_count > 0:
+            priority += 100.0 + min(20.0, float(ste_purchase_count) * 5.0)
+            ste_last_dt = last_ste_purchase_dt.get(ste_id)
+            if ste_last_dt is not None:
+                recency_days = max(0, (reference_date - ste_last_dt).days)
+                if recency_days <= 30:
+                    priority += 12.0
+                elif recency_days <= 180:
+                    priority += 6.0
+
+        category_purchase_count = category_counts.get(category, 0)
+        if category_purchase_count > 0:
+            priority += 20.0 + min(12.0, float(category_purchase_count) * 0.8)
+            category_last_dt = last_category_purchase_dt.get(category)
+            if category_last_dt is not None:
+                recency_days = max(0, (reference_date - category_last_dt).days)
+                if recency_days <= 30:
+                    priority += 8.0
+                elif recency_days <= 180:
+                    priority += 4.0
+
+        supplier_purchase_count = supplier_counts.get(supplier_inn, 0)
+        if supplier_purchase_count > 0:
+            priority += 8.0 + min(6.0, float(supplier_purchase_count) * 0.5)
+
+        for code in reason_codes:
+            priority += HISTORY_REASON_PRIORITIES.get(str(code), 0.0)
+
+        return priority
+
+    @staticmethod
+    def _session_priority(reason_codes: List[str]) -> float:
+        code_set = {str(code) for code in reason_codes}
+        if "SESSION_CART_BOOST" in code_set:
+            return 100.0
+        if "SESSION_CLICK_BOOST" in code_set:
+            return 60.0
+        if "SESSION_CATEGORY_BOOST" in code_set:
+            return 15.0
+        return 0.0
 
     def _dynamic_session_adjustment(
         self,

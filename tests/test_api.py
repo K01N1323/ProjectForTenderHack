@@ -367,6 +367,40 @@ class ApiTests(unittest.TestCase):
             search_service.close()
             runtime_service.close()
 
+    def test_runtime_prioritizes_purchase_history_over_plain_search_score(self) -> None:
+        runtime_service = PersonalizationRuntimeService(db_path=self.preprocessed_db_path)
+        try:
+            reranked = runtime_service.rerank_candidates(
+                query="ручка",
+                candidates=[
+                    {
+                        "ste_id": "ste-2",
+                        "clean_name": "Флеш накопитель 16 ГБ USB 3.0",
+                        "normalized_name": "флеш накопитель 16 гб usb 3 0",
+                        "category": "Usb-накопители твердотельные (флеш-драйвы)",
+                        "normalized_category": "usb накопители твердотельные флеш драйвы",
+                        "search_score": 100.0,
+                    },
+                    {
+                        "ste_id": "ste-1",
+                        "clean_name": "Ручка канцелярская синяя",
+                        "normalized_name": "ручка канцелярская синяя",
+                        "category": "Ручки канцелярские",
+                        "normalized_category": "ручки канцелярские",
+                        "search_score": 10.0,
+                    },
+                ],
+                user_id="user-7701234567",
+                customer_inn="7701234567",
+                customer_region="Москва",
+                session_categories=["Ручки канцелярские"],
+            )
+            self.assertEqual(reranked[0]["ste_id"], "ste-1")
+            self.assertGreater(reranked[0]["history_priority"], 0.0)
+            self.assertEqual(reranked[1]["history_priority"], 0.0)
+        finally:
+            runtime_service.close()
+
     def test_search_returns_personalized_product_shape(self) -> None:
         request_payload = {
             "query": "канцелярские ручки",
