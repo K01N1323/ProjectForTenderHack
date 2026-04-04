@@ -55,6 +55,18 @@ def ngram_jaccard(left: str, right: str) -> float:
     return intersection / union
 
 
+def token_jaccard(left: str, right: str) -> float:
+    left_tokens = set(normalize_tokens(left.split()))
+    right_tokens = set(normalize_tokens(right.split()))
+    if not left_tokens or not right_tokens:
+        return 0.0
+    intersection = len(left_tokens & right_tokens)
+    union = len(left_tokens | right_tokens)
+    if union == 0:
+        return 0.0
+    return intersection / union
+
+
 def cosine_similarity(left_vector: Iterable[float], right_vector: Iterable[float]) -> float:
     dot_product = 0.0
     left_norm = 0.0
@@ -130,7 +142,11 @@ class SqliteSemanticBackend:
         return unique_preserve_order(expansions), applied
 
     def sentence_similarity(self, left_text: str, right_text: str) -> float:
-        return 0.0
+        left = normalize_text(left_text)
+        right = normalize_text(right_text)
+        if not left or not right:
+            return 0.0
+        return max(ngram_jaccard(left, right), token_jaccard(left, right))
 
 
 class FastTextSemanticBackend:

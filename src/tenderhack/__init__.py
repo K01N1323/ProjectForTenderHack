@@ -6,7 +6,7 @@ from .personalization import PersonalizationService, build_customer_profile, rer
 from .personalization_runtime import PersonalizationRuntimeService
 from .semantic import SemanticExpander
 from .search import SearchService, search_ste
-from .search_rerank_model import SearchRerankPredictor
+from .search_rerank_model import SearchRerankPredictor, rerank_search_candidates
 
 __all__ = [
     "CacheService",
@@ -19,6 +19,7 @@ __all__ = [
     "SearchService",
     "SearchRerankPredictor",
     "build_customer_profile",
+    "rerank_search_candidates",
     "rerank_offers",
     "rerank_ste",
     "search_ste",

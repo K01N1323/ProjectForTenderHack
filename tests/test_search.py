@@ -187,5 +187,22 @@ class SearchServiceTests(unittest.TestCase):
         self.assertTrue({"канцелярская", "канцелярские"} & completion_targets)
 
 
+    def test_phrase_synonym_does_not_match_inside_larger_token(self) -> None:
+        payload = self.service.search("\u0441\u0443\u043f\u0435\u0440\u0444\u043b\u0435\u0448\u043a\u0430", top_k=3)
+        self.assertFalse(payload["query"]["applied_synonyms"])
+
+    def test_typo_query_does_not_keep_original_misspelled_token_in_expansions(self) -> None:
+        payload = self.service.search("\u043f\u0430\u0440\u0430\u0446\u0435\u0442\u043e\u043c\u043e\u043b 500 \u043c\u0433", top_k=3)
+        self.assertIn("\u043f\u0430\u0440\u0430\u0446\u0435\u0442\u0430\u043c\u043e\u043b", payload["query"]["expanded_tokens"])
+        self.assertNotIn("\u043f\u0430\u0440\u0430\u0446\u0435\u0442\u043e\u043c\u043e\u043b", payload["query"]["expanded_tokens"])
+
+    def test_sqlite_semantic_backend_exposes_sentence_similarity_signal(self) -> None:
+        similarity = self.service.semantic_expander.sentence_similarity(
+            "\u043c\u0444\u0443 \u043b\u0430\u0437\u0435\u0440\u043d\u043e\u0435",
+            "\u043c\u043d\u043e\u0433\u043e\u0444\u0443\u043d\u043a\u0446\u0438\u043e\u043d\u0430\u043b\u044c\u043d\u043e\u0435 \u0443\u0441\u0442\u0440\u043e\u0439\u0441\u0442\u0432\u043e \u043b\u0430\u0437\u0435\u0440\u043d\u043e\u0435",
+        )
+        self.assertGreater(similarity, 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()

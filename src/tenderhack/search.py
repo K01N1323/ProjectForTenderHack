@@ -14,6 +14,36 @@ DEFAULT_SEARCH_DB = Path("data/processed/tenderhack_search.sqlite")
 DEFAULT_SYNONYMS_PATH = Path("data/reference/search_synonyms.json")
 
 
+def _token_sequence_contains(tokens: List[str], phrase_tokens: List[str]) -> bool:
+    if not tokens or not phrase_tokens or len(phrase_tokens) > len(tokens):
+        return False
+    phrase_length = len(phrase_tokens)
+    for index in range(len(tokens) - phrase_length + 1):
+        if tokens[index : index + phrase_length] == phrase_tokens:
+            return True
+    return False
+
+
+def _is_search_anchor(token: str) -> bool:
+    if not token:
+        return False
+    if token.isdigit():
+        return len(token) >= 2
+    if any(char.isalpha() for char in token) and any(char.isdigit() for char in token):
+        return len(token) >= 2
+    return len(token) >= 2
+
+
+def _is_expansion_anchor(token: str) -> bool:
+    if not token:
+        return False
+    if token.isdigit():
+        return False
+    if any(char.isalpha() for char in token) and any(char.isdigit() for char in token):
+        return len(token) >= 2
+    return len(token) >= 3
+
+
 def _edit_distance(left: str, right: str, max_distance: int = 2) -> int:
     if left == right:
         return 0
@@ -222,9 +252,11 @@ class SearchService:
         applied: List[Dict[str, List[str]]] = []
         phrase_synonyms = self.synonyms["phrase_synonyms"]
         token_synonyms = self.synonyms["token_synonyms"]
+        query_tokens = normalize_tokens(tokenize(normalized_query))
 
         for phrase, replacements in phrase_synonyms.items():
-            if phrase and phrase in normalized_query:
+            phrase_tokens = normalize_tokens(tokenize(phrase))
+            if phrase_tokens and _token_sequence_contains(query_tokens, phrase_tokens):
                 expanded.extend(replacements)
                 applied.append({"source": phrase, "targets": replacements})
 
@@ -268,8 +300,6 @@ class SearchService:
         normalized_query = normalize_text(query)
         original_tokens = normalize_tokens(tokenize(normalized_query))
 
-        original_synonym_expansions, original_applied_synonyms = self._apply_synonyms(normalized_query, original_tokens)
-
         corrected_tokens: List[str] = []
         corrections: List[Dict[str, str]] = []
         synonym_keys = set(self.synonyms["token_synonyms"].keys())
@@ -285,14 +315,11 @@ class SearchService:
         corrected_query = " ".join(corrected_tokens)
 
         completion_expansions, applied_completions = self._expand_completion_tokens(corrected_tokens)
-        corrected_synonym_expansions, corrected_applied_synonyms = self._apply_synonyms(
-            corrected_query or normalized_query,
-            corrected_tokens,
-        )
-        synonym_expansions = unique_preserve_order(original_synonym_expansions + corrected_synonym_expansions)
-        applied_synonyms = self._dedupe_applied_targets(original_applied_synonyms + corrected_applied_synonyms)
+        expansion_query = corrected_query or normalized_query
+        synonym_expansions, applied_synonyms = self._apply_synonyms(expansion_query, corrected_tokens)
+        applied_synonyms = self._dedupe_applied_targets(applied_synonyms)
         semantic_expansions, applied_semantic_neighbors = self.semantic_expander.expand_tokens(corrected_tokens)
-        merged_tokens = unique_preserve_order(corrected_tokens + synonym_expansions + completion_expansions + semantic_expansions)
+        merged_tokens = unique_preserve_order(corrected_tokens + synonym_expansions + completion_expansions)
         stemmed_tokens = stem_tokens(corrected_tokens)
         expanded_stems = stem_tokens(merged_tokens)
         return QueryAnalysis(
@@ -312,24 +339,26 @@ class SearchService:
             applied_semantic_neighbors=applied_semantic_neighbors,
         )
 
-    def _build_match_query(self, analysis: QueryAnalysis) -> str:
-        terms: List[str] = []
-        for token in analysis.corrected_tokens:
-            if token:
-                terms.append(f"{token}*")
-        for stem in analysis.expanded_stems:
-            if len(stem) >= 3:
-                terms.append(f"{stem}*")
-        terms = unique_preserve_order(terms)
-        if not terms:
-            return ""
-        return " OR ".join(terms)
+    def _build_match_queries(self, analysis: QueryAnalysis) -> tuple[str, str]:
+        corrected_terms = unique_preserve_order(
+            [f"{token}*" for token in analysis.corrected_tokens if _is_search_anchor(token)]
+        )
+        expanded_terms = unique_preserve_order(
+            [f"{stem}*" for stem in analysis.expanded_stems if _is_expansion_anchor(stem)]
+        )
 
-    def _fetch_candidates(self, analysis: QueryAnalysis, candidate_limit: int = 250) -> List[sqlite3.Row]:
-        match_query = self._build_match_query(analysis)
+        if not corrected_terms and not expanded_terms:
+            return "", ""
+
+        strict_query = " AND ".join(corrected_terms)
+        relaxed_terms = unique_preserve_order(corrected_terms + expanded_terms)
+        relaxed_query = " OR ".join(relaxed_terms)
+        return strict_query, relaxed_query
+
+    def _run_match_query(self, match_query: str, limit: int) -> List[sqlite3.Row]:
         if not match_query:
             return []
-        rows = self.conn.execute(
+        return self.conn.execute(
             """
             SELECT
                 ste_catalog.rowid AS row_id,
@@ -348,9 +377,29 @@ class SearchService:
             ORDER BY bm25_score
             LIMIT ?
             """,
-            (match_query, candidate_limit),
+            (match_query, limit),
         ).fetchall()
-        return rows
+
+    def _fetch_candidates(self, analysis: QueryAnalysis, candidate_limit: int = 250) -> List[sqlite3.Row]:
+        strict_query, relaxed_query = self._build_match_queries(analysis)
+        if not strict_query and not relaxed_query:
+            return []
+
+        merged_by_row_id: Dict[int, sqlite3.Row] = {}
+        if strict_query:
+            for row in self._run_match_query(strict_query, candidate_limit):
+                merged_by_row_id[int(row["row_id"])] = row
+
+        enough_strict_rows = len(merged_by_row_id) >= min(candidate_limit, 40)
+        if enough_strict_rows or not relaxed_query or relaxed_query == strict_query:
+            return list(merged_by_row_id.values())[:candidate_limit]
+
+        relaxed_limit = max(candidate_limit, min(candidate_limit * 2, 500))
+        for row in self._run_match_query(relaxed_query, relaxed_limit):
+            merged_by_row_id.setdefault(int(row["row_id"]), row)
+            if len(merged_by_row_id) >= candidate_limit:
+                break
+        return list(merged_by_row_id.values())[:candidate_limit]
 
     @staticmethod
     def _needs_broader_retrieval(analysis: QueryAnalysis) -> bool:

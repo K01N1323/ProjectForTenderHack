@@ -29,26 +29,22 @@ from tenderhack.search_rerank_model import SearchRerankPredictor
 from tenderhack.text import normalize_text, stem_token, tokenize, unique_preserve_order
 
 
-def _discover_search_rerank_model_path(project_root: Path) -> Path:
-    candidates = [
-        project_root / "data" / "processed" / "tenderhack_yeti_ranker.cbm",
-        project_root / "data" / "processed" / "tenderhack_yeti_ranker_small.cbm",
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    return candidates[0]
+def _env_path(name: str, default: Path) -> Path:
+    return Path(os.getenv(name, str(default)))
 
 
-def _discover_search_rerank_metadata_path(project_root: Path) -> Path:
-    candidates = [
-        project_root / "data" / "processed" / "tenderhack_yeti_ranker.json",
-        project_root / "data" / "processed" / "tenderhack_yeti_ranker_small.json",
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    return candidates[0]
+def _optional_env_path(name: str) -> Optional[Path]:
+    value = os.getenv(name)
+    if not value:
+        return None
+    return Path(value)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() not in {"0", "false", "no", "off"}
 
 
 @dataclass
@@ -58,8 +54,9 @@ class AppSettings:
     synonyms_path: Path = PROJECT_ROOT / "data" / "reference" / "search_synonyms.json"
     fasttext_model_path: Path = PROJECT_ROOT / "data" / "processed" / "tenderhack_fasttext.bin"
     personalization_model_path: Path = PROJECT_ROOT / "artifacts" / "personalization_model.cbm"
-    search_rerank_model_path: Path = _discover_search_rerank_model_path(PROJECT_ROOT)
-    search_rerank_metadata_path: Path = _discover_search_rerank_metadata_path(PROJECT_ROOT)
+    search_rerank_enabled: bool = True
+    search_rerank_model_path: Optional[Path] = None
+    search_rerank_metadata_path: Optional[Path] = None
     raw_ste_catalog_path: Path = PROJECT_ROOT / "СТЕ_20260403.csv"
     redis_url: Optional[str] = "memory://"
     semantic_backend: str = "auto"
@@ -73,19 +70,16 @@ class AppSettings:
     @classmethod
     def from_env(cls) -> "AppSettings":
         return cls(
-            search_db_path=Path(os.getenv("TENDERHACK_SEARCH_DB", cls.search_db_path)),
-            preprocessed_db_path=Path(os.getenv("TENDERHACK_PREPROCESSED_DB", cls.preprocessed_db_path)),
-            synonyms_path=Path(os.getenv("TENDERHACK_SYNONYMS_PATH", cls.synonyms_path)),
-            fasttext_model_path=Path(os.getenv("TENDERHACK_FASTTEXT_MODEL_PATH", cls.fasttext_model_path)),
+            search_db_path=_env_path("TENDERHACK_SEARCH_DB", cls.search_db_path),
+            preprocessed_db_path=_env_path("TENDERHACK_PREPROCESSED_DB", cls.preprocessed_db_path),
+            synonyms_path=_env_path("TENDERHACK_SYNONYMS_PATH", cls.synonyms_path),
+            fasttext_model_path=_env_path("TENDERHACK_FASTTEXT_MODEL_PATH", cls.fasttext_model_path),
             personalization_model_path=Path(
                 os.getenv("TENDERHACK_PERSONALIZATION_MODEL_PATH", cls.personalization_model_path)
             ),
-            search_rerank_model_path=Path(
-                os.getenv("TENDERHACK_SEARCH_RERANK_MODEL_PATH", cls.search_rerank_model_path)
-            ),
-            search_rerank_metadata_path=Path(
-                os.getenv("TENDERHACK_SEARCH_RERANK_METADATA_PATH", cls.search_rerank_metadata_path)
-            ),
+            search_rerank_enabled=_env_bool("TENDERHACK_SEARCH_RERANK_ENABLED", cls.search_rerank_enabled),
+            search_rerank_model_path=_optional_env_path("TENDERHACK_SEARCH_RERANK_MODEL_PATH"),
+            search_rerank_metadata_path=_optional_env_path("TENDERHACK_SEARCH_RERANK_METADATA_PATH"),
             raw_ste_catalog_path=Path(os.getenv("TENDERHACK_RAW_STE_CATALOG_PATH", cls.raw_ste_catalog_path)),
             redis_url=os.getenv("TENDERHACK_REDIS_URL") or cls.redis_url,
             semantic_backend=os.getenv("TENDERHACK_SEMANTIC_BACKEND", cls.semantic_backend),
@@ -214,10 +208,15 @@ class TenderHackApiService:
             cache_service=self.cache_service,
             base_profile_ttl_seconds=settings.user_profile_cache_ttl_seconds,
         )
-        self.search_rerank_predictor = SearchRerankPredictor(
-            model_path=settings.search_rerank_model_path,
-            metadata_path=settings.search_rerank_metadata_path,
+        self.search_rerank_predictor = (
+            SearchRerankPredictor(
+                model_path=settings.search_rerank_model_path,
+                metadata_path=settings.search_rerank_metadata_path,
+            )
+            if settings.search_rerank_enabled
+            else None
         )
+        self.search_rerank_cache_token = self._build_search_rerank_cache_token()
         self.offer_lookup_service = OfferLookupService(
             db_path=settings.preprocessed_db_path,
             cache_service=self.cache_service,
@@ -343,7 +342,11 @@ class TenderHackApiService:
 
         cache_key = self.cache_service.build_key(
             "search",
-            data=self._search_cache_data(payload, server_session=merged_session_state),
+            data=self._search_cache_data(
+                payload,
+                server_session=merged_session_state,
+                search_rerank_token=self.search_rerank_cache_token,
+            ),
         )
         cached_payload = self.cache_service.get_json(cache_key)
         if isinstance(cached_payload, dict):
@@ -351,7 +354,7 @@ class TenderHackApiService:
 
         raw_payload = self.search_service.search(query=payload.query, top_k=max(payload.topK * 5, 60))
         results = list(raw_payload["results"])
-        if self.search_rerank_predictor.enabled:
+        if self.search_rerank_predictor and self.search_rerank_predictor.enabled:
             results = self.search_rerank_predictor.rerank_candidates(
                 query=payload.query,
                 query_meta=dict(raw_payload["query"]),
@@ -953,10 +956,15 @@ class TenderHackApiService:
         return [deduped_by_text[key] for key in order]
 
     @staticmethod
-    def _search_cache_data(payload: SearchRequest, server_session: Optional[dict] = None) -> dict:
+    def _search_cache_data(
+        payload: SearchRequest,
+        server_session: Optional[dict] = None,
+        search_rerank_token: str = "disabled",
+    ) -> dict:
         user_context = payload.userContext or SearchUserContext()
         return {
             "query": payload.query,
+            "search_rerank_token": search_rerank_token,
             "user_id": user_context.id,
             "user_inn": user_context.inn,
             "user_region": user_context.region,
@@ -980,6 +988,16 @@ class TenderHackApiService:
                 [normalize_text(str(value)) for value in (server_session or {}).get("bounced_categories", []) if value]
             ),
         }
+
+    def _build_search_rerank_cache_token(self) -> str:
+        predictor = self.search_rerank_predictor
+        if predictor is None or not predictor.enabled:
+            return "disabled"
+        try:
+            modified_at = int(predictor.model_path.stat().st_mtime)
+        except OSError:
+            modified_at = 0
+        return f"{predictor.model_path.name}:{modified_at}"
 
     @staticmethod
     def _map_reason_to_show(

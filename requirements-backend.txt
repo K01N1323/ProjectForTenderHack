@@ -3,3 +3,4 @@ uvicorn
 httpx
 redis
 catboost>=1.2,<2.0 ; python_version < "3.13"
+lightgbm>=4.0,<5.0
