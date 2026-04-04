@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import copy
 import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
+from tenderhack.cache import CacheService
 from features.personalization_features import derive_item_kind
 from tenderhack.personalization_model import PersonalizationPredictor
 from tenderhack.text import normalize_text, unique_preserve_order
@@ -49,12 +51,16 @@ class PersonalizationRuntimeService:
         db_path: Path | str = DEFAULT_PREPROCESSED_DB,
         model_path: Path | str = DEFAULT_PERSONALIZATION_MODEL_PATH,
         personalization_weight: float = 0.35,
+        cache_service: CacheService | None = None,
+        base_profile_ttl_seconds: int = 1800,
     ) -> None:
         self.db_path = Path(db_path)
-        self.conn = sqlite3.connect(self.db_path)
+        self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.predictor = PersonalizationPredictor(model_path=model_path)
         self.personalization_weight = float(personalization_weight)
+        self.cache_service = cache_service
+        self.base_profile_ttl_seconds = int(base_profile_ttl_seconds)
 
     def close(self) -> None:
         self.conn.close()
@@ -68,6 +74,7 @@ class PersonalizationRuntimeService:
         customer_inn: Optional[str] = None,
         customer_region: Optional[str] = None,
         session_categories: Optional[List[str]] = None,
+        session_state: Optional[Dict[str, object]] = None,
         reference_date: Optional[date] = None,
     ) -> List[Dict[str, object]]:
         if not candidates:
@@ -99,18 +106,34 @@ class PersonalizationRuntimeService:
             query_features=query_features,
         )
         predictions_by_id = {str(item["candidate_id"]): item for item in predictions}
+        active_session_state = session_state or {}
 
         reranked: List[Dict[str, object]] = []
         for index, candidate in enumerate(enriched_candidates, start=1):
             candidate_id = str(candidate.get("candidate_id") or candidate.get("ste_id") or "")
             prediction = predictions_by_id.get(candidate_id, {})
             personalization_score = float(prediction.get("personalization_score", 0.0) or 0.0)
-            final_score = float(candidate.get("search_score", 0.0)) + self.personalization_weight * personalization_score
+            dynamic_score, dynamic_reason_codes, dynamic_reasons = self._dynamic_session_adjustment(
+                candidate=candidate,
+                session_state=active_session_state,
+            )
+            reason_codes = unique_preserve_order(
+                [str(code) for code in prediction.get("top_reason_codes", [])] + dynamic_reason_codes
+            )
+            reasons = unique_preserve_order(
+                [str(text) for text in prediction.get("reasons", [])] + dynamic_reasons
+            )
+            final_score = (
+                float(candidate.get("search_score", 0.0))
+                + self.personalization_weight * personalization_score
+                + dynamic_score
+            )
             enriched = dict(candidate)
             enriched["base_search_rank"] = index
             enriched["personalization_score"] = round(personalization_score, 6)
-            enriched["top_reason_codes"] = list(prediction.get("top_reason_codes", []))
-            enriched["reasons"] = list(prediction.get("reasons", []))
+            enriched["dynamic_session_score"] = round(dynamic_score, 6)
+            enriched["top_reason_codes"] = reason_codes
+            enriched["reasons"] = reasons
             enriched["final_score"] = round(final_score, 6)
             reranked.append(enriched)
 
@@ -124,6 +147,44 @@ class PersonalizationRuntimeService:
         )
         return reranked
 
+    def _dynamic_session_adjustment(
+        self,
+        *,
+        candidate: Dict[str, object],
+        session_state: Dict[str, object],
+    ) -> tuple[float, List[str], List[str]]:
+        category_norm = normalize_text(str(candidate.get("category") or candidate.get("normalized_category") or ""))
+        ste_id = str(candidate.get("ste_id") or candidate.get("candidate_id") or "")
+        clicked_ids = {str(value) for value in session_state.get("clicked_ste_ids", [])}
+        cart_ids = {str(value) for value in session_state.get("cart_ste_ids", [])}
+        recent_categories = {normalize_text(str(value)) for value in session_state.get("recent_categories", []) if value}
+        bounced_categories = {normalize_text(str(value)) for value in session_state.get("bounced_categories", []) if value}
+
+        score = 0.0
+        reason_codes: List[str] = []
+        reasons: List[str] = []
+
+        if ste_id and ste_id in clicked_ids:
+            score += 12.0
+            reason_codes.append("SESSION_CLICK_BOOST")
+            reasons.append("Поднято после недавнего клика пользователя")
+        if ste_id and ste_id in cart_ids:
+            # Cart actions are the strongest online signal and should dominate
+            # weaker historical priors for the exact candidate.
+            score += 35.0
+            reason_codes.append("SESSION_CART_BOOST")
+            reasons.append("Поднято после добавления похожей позиции в корзину")
+        if category_norm and category_norm in recent_categories:
+            score += 1.5
+            reason_codes.append("SESSION_CATEGORY_BOOST")
+            reasons.append("Категория была недавно просмотрена в текущей сессии")
+        if category_norm and category_norm in bounced_categories:
+            score -= 10.0
+            reason_codes.append("SESSION_BOUNCE_PENALTY")
+            reasons.append("Категория понижена после быстрого отказа")
+
+        return score, reason_codes, reasons
+
     def build_user_profile(
         self,
         *,
@@ -133,9 +194,16 @@ class PersonalizationRuntimeService:
         session_categories: List[str],
         reference_date: date,
     ) -> Dict[str, object]:
-        region = customer_region or self._infer_customer_region(customer_inn)
-        profile: Dict[str, object] = {
-            "user_id": user_id,
+        profile = self._load_base_profile(customer_inn=customer_inn, customer_region=customer_region)
+        profile["user_id"] = user_id
+        if customer_region:
+            profile["customer_region"] = customer_region
+        self._apply_session_categories(profile=profile, session_categories=session_categories, reference_date=reference_date)
+        return profile
+
+    def _new_profile_template(self, region: Optional[str]) -> Dict[str, object]:
+        return {
+            "user_id": "UNKNOWN",
             "customer_region": region or "UNKNOWN",
             "total_purchases": 0,
             "total_amount": 0.0,
@@ -152,10 +220,33 @@ class PersonalizationRuntimeService:
             "recent_purchase_dates": [],
             "recent_category_dates": {},
         }
-        if customer_inn:
-            self._fill_profile_from_history(profile=profile, customer_inn=customer_inn)
-        self._apply_session_categories(profile=profile, session_categories=session_categories, reference_date=reference_date)
-        return profile
+
+    def _load_base_profile(
+        self,
+        *,
+        customer_inn: Optional[str],
+        customer_region: Optional[str],
+    ) -> Dict[str, object]:
+        if not customer_inn:
+            return self._new_profile_template(region=customer_region)
+
+        cache_key = None
+        if self.cache_service and self.cache_service.enabled:
+            cache_key = self.cache_service.build_key("user-profile", suffix=str(customer_inn))
+            cached_profile = self.cache_service.get_json(cache_key)
+            if isinstance(cached_profile, dict):
+                profile = copy.deepcopy(cached_profile)
+                if customer_region:
+                    profile["customer_region"] = customer_region
+                return profile
+
+        region = customer_region or self._infer_customer_region(customer_inn)
+        profile = self._new_profile_template(region=region)
+        self._fill_profile_from_history(profile=profile, customer_inn=customer_inn)
+
+        if cache_key and self.cache_service:
+            self.cache_service.set_json(cache_key, profile, ttl_seconds=self.base_profile_ttl_seconds)
+        return copy.deepcopy(profile)
 
     def enrich_candidates(
         self,
