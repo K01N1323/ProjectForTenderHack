@@ -105,7 +105,7 @@ export const useStore = create<StoreState>((set, get) => ({
       return {
         productOpenTimes: nextOpenTimes,
         bouncedCategories:
-          timeSpent < 3000
+          timeSpent < 2000
             ? [...new Set([...state.bouncedCategories, category])]
             : state.bouncedCategories,
       };

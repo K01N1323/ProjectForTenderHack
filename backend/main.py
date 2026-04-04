@@ -25,7 +25,31 @@ from tenderhack.offers import OfferLookupService
 from tenderhack.personalization import PersonalizationService
 from tenderhack.personalization_runtime import PersonalizationRuntimeService
 from tenderhack.search import SearchService
-from tenderhack.text import normalize_text, tokenize, unique_preserve_order
+from tenderhack.search_rerank_model import SearchRerankPredictor
+from tenderhack.text import normalize_text, stem_token, tokenize, unique_preserve_order
+from tenderhack.penalization import InMemorySkipStorage, InteractionTracker, RankingModifier
+
+
+def _discover_search_rerank_model_path(project_root: Path) -> Path:
+    candidates = [
+        project_root / "data" / "processed" / "tenderhack_yeti_ranker.cbm",
+        project_root / "data" / "processed" / "tenderhack_yeti_ranker_small.cbm",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+def _discover_search_rerank_metadata_path(project_root: Path) -> Path:
+    candidates = [
+        project_root / "data" / "processed" / "tenderhack_yeti_ranker.json",
+        project_root / "data" / "processed" / "tenderhack_yeti_ranker_small.json",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
 
 
 @dataclass
@@ -176,6 +200,9 @@ class TenderHackApiService:
             cache_service=self.cache_service,
             lookup_ttl_seconds=settings.offer_lookup_cache_ttl_seconds,
         )
+        self.skip_storage = InMemorySkipStorage()
+        self.interaction_tracker = InteractionTracker(self.skip_storage)
+        self.ranking_modifier = RankingModifier(self.skip_storage)
 
     def close(self) -> None:
         self.search_service.close()
@@ -269,11 +296,11 @@ class TenderHackApiService:
                 item["top_reason_codes"] = []
                 item["reasons"] = ["оставлено выше за счёт базовой текстовой релевантности"]
 
-        for item in results:
-            category_norm = normalize_text(str(item.get("category", "")))
-            if category_norm and category_norm in bounced_categories:
-                item["final_score"] = round(float(item.get("final_score", item.get("search_score", 0.0))) - 100.0, 4)
-                item["reason_to_hide"] = "Категория пессимизирована после быстрого отказа"
+        # Применяем эвристическую пессимизацию (штраф за быстрый отказ)
+        results = self.ranking_modifier.apply_penalties(
+            recommendations=results, 
+            user_id=user_context.id or (f"user-{user_context.inn}" if user_context.inn else "anonymous")
+        )
 
         results.sort(
             key=lambda item: (
@@ -338,6 +365,13 @@ class TenderHackApiService:
 
     def record_event(self, payload: EventRequest) -> EventResponsePayload:
         resolved_user_id = payload.userId or (f"user-{payload.inn}" if payload.inn else "anonymous")
+
+        if payload.eventType == "item_close":
+            self.interaction_tracker.register_view(
+                user_id=resolved_user_id,
+                category_id=str(payload.category or ""),
+                dwell_time_ms=payload.durationMs or 0
+            )
         session_state = self.online_state_service.record_event(
             user_id=resolved_user_id,
             customer_inn=payload.inn,

@@ -136,11 +136,24 @@ const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
                         
                         <div className="bg-blue-50 border border-blue-100 p-4 mb-8 text-blue-800 text-sm">
                             <p className="font-semibold mb-1">Режим имитации пользовательского опыта</p>
-                            Закройте это окно <strong>быстрее, чем за 3 секунды</strong>, чтобы система засчитала "Быстрый отказ". В результате эта категория товаров будет реже появляться в ленте и упадет в рейтинге.
+                            Закройте это окно <strong>быстрее, чем за 2 секунды</strong>, чтобы система засчитала "Быстрый отказ". В результате эта категория товаров будет реже появляться в ленте и упадет в рейтинге.
                         </div>
 
-                        <div className="text-[#da291c] font-bold text-3xl md:text-4xl">
-                            {product.price.toLocaleString('ru-RU')} ₽
+                        <div className="flex items-end justify-between gap-4">
+                            <div className="text-[#1f2937] font-bold text-3xl md:text-4xl">
+                                {product.price.toLocaleString('ru-RU')} ₽
+                            </div>
+                            <button
+                                type="button"
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    addToCart(product.id, product.category);
+                                }}
+                                className="inline-flex items-center gap-2 bg-[#d63d2b] hover:bg-[#bf3324] text-white px-5 py-3 font-semibold transition-colors"
+                            >
+                                <ShoppingCart size={18} />
+                                Добавить в корзину
+                            </button>
                         </div>
                     </div>
                 </div>,
