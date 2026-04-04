@@ -160,6 +160,22 @@ Pipeline запроса:
 5. retrieval через SQLite FTS / BM25
 6. дополнительный lexical + semantic scoring
 
+### Пересборка большого словаря синонимов
+
+Поиск использует файл `data/reference/search_synonyms.json`. Теперь его можно
+пересобирать автоматически из вашего каталога СТЕ:
+
+```bash
+python3 scripts/generate_search_synonyms.py --catalog-path ./СТЕ_20260403.csv
+```
+
+Скрипт:
+
+- вытаскивает словарь токенов из датасета;
+- добавляет крупный набор пользовательских доменных синонимов;
+- автоматически подхватывает короткие алиасы и сокращения из категорий;
+- сохраняет итоговый JSON в `data/reference/search_synonyms.json`.
+
 ### 3. Personalization layer
 
 Персонализация реализована в:
