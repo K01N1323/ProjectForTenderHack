@@ -1,0 +1,363 @@
+{
+  "model_feature_order": [
+    "query_name_token_overlap",
+    "query_category_token_overlap",
+    "query_attribute_token_overlap",
+    "query_token_coverage",
+    "query_exact_name_match",
+    "query_length_tokens",
+    "candidate_name_length_tokens",
+    "candidate_attribute_count",
+    "query_attribute_match_count",
+    "user_total_purchase_count",
+    "user_category_purchase_count",
+    "user_ste_purchase_count",
+    "user_supplier_purchase_count",
+    "user_category_purchase_share",
+    "user_repeat_buy_signal",
+    "user_novelty_signal",
+    "user_last_category_recency_days",
+    "user_last_ste_recency_days",
+    "user_last_supplier_recency_days",
+    "user_recent_30d_purchase_count",
+    "user_recent_90d_purchase_count",
+    "user_recent_30d_category_count",
+    "user_recent_90d_category_count",
+    "user_avg_amount",
+    "user_median_amount",
+    "category_price_p25",
+    "category_price_p75",
+    "candidate_price_proxy",
+    "candidate_price_vs_user_avg_ratio",
+    "candidate_price_distance_to_user_median",
+    "candidate_price_in_user_range",
+    "global_ste_popularity",
+    "global_category_popularity",
+    "regional_ste_popularity",
+    "regional_category_popularity",
+    "similar_customer_ste_popularity",
+    "seasonal_category_popularity",
+    "days_since_last_similar_purchase",
+    "candidate_ste_recent_30d_popularity",
+    "candidate_category_recent_90d_popularity",
+    "candidate_primary_supplier_share",
+    "candidate_supplier_affinity",
+    "candidate_supplier_region_match",
+    "candidate_item_kind_affinity"
+  ],
+  "features": [
+    {
+      "name": "query_name_token_overlap",
+      "scope": "query_candidate",
+      "default": 0.0,
+      "description": "Token overlap between query and STE name."
+    },
+    {
+      "name": "query_category_token_overlap",
+      "scope": "query_candidate",
+      "default": 0.0,
+      "description": "Token overlap between query and category."
+    },
+    {
+      "name": "query_attribute_token_overlap",
+      "scope": "query_candidate",
+      "default": 0.0,
+      "description": "Token overlap between query and attributes."
+    },
+    {
+      "name": "query_token_coverage",
+      "scope": "query_candidate",
+      "default": 0.0,
+      "description": "Coverage of query tokens by candidate fields."
+    },
+    {
+      "name": "query_exact_name_match",
+      "scope": "query_candidate",
+      "default": 0.0,
+      "description": "Exact normalized query phrase appears in STE name."
+    },
+    {
+      "name": "query_length_tokens",
+      "scope": "query",
+      "default": 0.0,
+      "description": "Number of query tokens."
+    },
+    {
+      "name": "candidate_name_length_tokens",
+      "scope": "candidate",
+      "default": 0.0,
+      "description": "Length of candidate STE name in tokens."
+    },
+    {
+      "name": "candidate_attribute_count",
+      "scope": "candidate",
+      "default": 0.0,
+      "description": "Number of known candidate attributes."
+    },
+    {
+      "name": "query_attribute_match_count",
+      "scope": "query_candidate",
+      "default": 0.0,
+      "description": "Count of query tokens matched in attribute keys."
+    },
+    {
+      "name": "user_total_purchase_count",
+      "scope": "user_profile",
+      "default": 0.0,
+      "description": "Total historical purchases of the customer."
+    },
+    {
+      "name": "user_category_purchase_count",
+      "scope": "user_profile",
+      "default": 0.0,
+      "description": "Historical purchase count in candidate category."
+    },
+    {
+      "name": "user_ste_purchase_count",
+      "scope": "user_profile",
+      "default": 0.0,
+      "description": "Historical purchase count of the candidate STE."
+    },
+    {
+      "name": "user_supplier_purchase_count",
+      "scope": "user_profile",
+      "default": 0.0,
+      "description": "Historical purchase count from candidate dominant supplier."
+    },
+    {
+      "name": "user_category_purchase_share",
+      "scope": "user_profile",
+      "default": 0.0,
+      "description": "Share of purchases in candidate category."
+    },
+    {
+      "name": "user_repeat_buy_signal",
+      "scope": "user_profile",
+      "default": 0.0,
+      "description": "Candidate STE already exists in purchase history."
+    },
+    {
+      "name": "user_novelty_signal",
+      "scope": "user_profile",
+      "default": 1.0,
+      "description": "Candidate STE is new for the customer."
+    },
+    {
+      "name": "user_last_category_recency_days",
+      "scope": "user_profile",
+      "default": 3650.0,
+      "description": "Days since last purchase in candidate category."
+    },
+    {
+      "name": "user_last_ste_recency_days",
+      "scope": "user_profile",
+      "default": 3650.0,
+      "description": "Days since last purchase of candidate STE."
+    },
+    {
+      "name": "user_last_supplier_recency_days",
+      "scope": "user_profile",
+      "default": 3650.0,
+      "description": "Days since last purchase from candidate dominant supplier."
+    },
+    {
+      "name": "user_recent_30d_purchase_count",
+      "scope": "user_profile",
+      "default": 0.0,
+      "description": "Historical purchases in last 30 days."
+    },
+    {
+      "name": "user_recent_90d_purchase_count",
+      "scope": "user_profile",
+      "default": 0.0,
+      "description": "Historical purchases in last 90 days."
+    },
+    {
+      "name": "user_recent_30d_category_count",
+      "scope": "user_profile",
+      "default": 0.0,
+      "description": "Historical purchases in category in last 30 days."
+    },
+    {
+      "name": "user_recent_90d_category_count",
+      "scope": "user_profile",
+      "default": 0.0,
+      "description": "Historical purchases in category in last 90 days."
+    },
+    {
+      "name": "user_avg_amount",
+      "scope": "user_profile",
+      "default": 0.0,
+      "description": "Average contract amount of the user history."
+    },
+    {
+      "name": "user_median_amount",
+      "scope": "user_profile",
+      "default": 0.0,
+      "description": "Median contract amount of the user history."
+    },
+    {
+      "name": "category_price_p25",
+      "scope": "candidate_prior",
+      "default": 0.0,
+      "description": "25th percentile of historical category price proxy."
+    },
+    {
+      "name": "category_price_p75",
+      "scope": "candidate_prior",
+      "default": 0.0,
+      "description": "75th percentile of historical category price proxy."
+    },
+    {
+      "name": "candidate_price_proxy",
+      "scope": "candidate_prior",
+      "default": 0.0,
+      "description": "Candidate price proxy from historical contracts."
+    },
+    {
+      "name": "candidate_price_vs_user_avg_ratio",
+      "scope": "derived",
+      "default": 0.0,
+      "description": "Candidate price proxy divided by user average amount."
+    },
+    {
+      "name": "candidate_price_distance_to_user_median",
+      "scope": "derived",
+      "default": 0.0,
+      "description": "Absolute distance between candidate price proxy and user median amount."
+    },
+    {
+      "name": "candidate_price_in_user_range",
+      "scope": "derived",
+      "default": 0.0,
+      "description": "Candidate price is inside category/user habitual range."
+    },
+    {
+      "name": "global_ste_popularity",
+      "scope": "candidate_prior",
+      "default": 0.0,
+      "description": "Historical global popularity of candidate STE."
+    },
+    {
+      "name": "global_category_popularity",
+      "scope": "candidate_prior",
+      "default": 0.0,
+      "description": "Historical global popularity of candidate category."
+    },
+    {
+      "name": "regional_ste_popularity",
+      "scope": "candidate_prior",
+      "default": 0.0,
+      "description": "Historical popularity of candidate STE in the user region."
+    },
+    {
+      "name": "regional_category_popularity",
+      "scope": "candidate_prior",
+      "default": 0.0,
+      "description": "Historical popularity of candidate category in the user region."
+    },
+    {
+      "name": "similar_customer_ste_popularity",
+      "scope": "candidate_prior",
+      "default": 0.0,
+      "description": "Historical popularity among a lightweight similar-customer segment."
+    },
+    {
+      "name": "seasonal_category_popularity",
+      "scope": "candidate_prior",
+      "default": 0.0,
+      "description": "Historical category popularity in the same calendar month."
+    },
+    {
+      "name": "days_since_last_similar_purchase",
+      "scope": "user_profile",
+      "default": 3650.0,
+      "description": "Days since last purchase in the same category."
+    },
+    {
+      "name": "candidate_ste_recent_30d_popularity",
+      "scope": "candidate_prior",
+      "default": 0.0,
+      "description": "Recent 30d popularity of candidate STE."
+    },
+    {
+      "name": "candidate_category_recent_90d_popularity",
+      "scope": "candidate_prior",
+      "default": 0.0,
+      "description": "Recent 90d popularity of candidate category."
+    },
+    {
+      "name": "candidate_primary_supplier_share",
+      "scope": "candidate_prior",
+      "default": 0.0,
+      "description": "Share of the dominant supplier in historical candidate purchases."
+    },
+    {
+      "name": "candidate_supplier_affinity",
+      "scope": "derived",
+      "default": 0.0,
+      "description": "Affinity of the user to the candidate dominant supplier."
+    },
+    {
+      "name": "candidate_supplier_region_match",
+      "scope": "derived",
+      "default": 0.0,
+      "description": "Dominant supplier region matches the user region."
+    },
+    {
+      "name": "candidate_item_kind_affinity",
+      "scope": "derived",
+      "default": 0.0,
+      "description": "Affinity of the user to the candidate item kind."
+    }
+  ],
+  "integration_contract": {
+    "input": {
+      "user_id": "str",
+      "query_features": {
+        "query": "str",
+        "reference_date": "ISO-8601 date optional"
+      },
+      "user_profile": {
+        "customer_region": "str",
+        "total_purchases": "int",
+        "recent_amounts": "list[float]",
+        "category_counts": "dict[str,int]",
+        "ste_counts": "dict[str,int]",
+        "supplier_counts": "dict[str,int]",
+        "item_kind_counts": "dict[str,int]",
+        "last_category_purchase_dt": "dict[str,ISO-date]",
+        "last_ste_purchase_dt": "dict[str,ISO-date]",
+        "last_supplier_purchase_dt": "dict[str,ISO-date]"
+      },
+      "candidates": [
+        {
+          "candidate_id": "str",
+          "clean_name": "str",
+          "category": "str",
+          "attribute_keys": "str",
+          "attribute_count": "int",
+          "candidate_price_proxy": "float",
+          "global_ste_popularity": "float",
+          "global_category_popularity": "float",
+          "regional_ste_popularity": "float",
+          "regional_category_popularity": "float",
+          "similar_customer_ste_popularity": "float",
+          "seasonal_category_popularity": "float",
+          "candidate_ste_recent_30d_popularity": "float",
+          "candidate_category_recent_90d_popularity": "float",
+          "candidate_primary_supplier_inn": "str",
+          "candidate_primary_supplier_region": "str",
+          "candidate_primary_supplier_share": "float"
+        }
+      ]
+    },
+    "output": {
+      "candidate_id": "str",
+      "personalization_score": "float",
+      "top_reason_codes": "list[str]",
+      "reasons": "list[str]"
+    },
+    "function_signature": "predict_personalization(candidates, user_profile, query_features) -> rescored_candidates"
+  }
+}

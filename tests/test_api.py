@@ -20,6 +20,8 @@ if str(SRC_ROOT) not in sys.path:
 
 from backend.main import AppSettings, create_app
 from scripts.build_search_assets import build_search_db
+from tenderhack.personalization_runtime import PersonalizationRuntimeService
+from tenderhack.search import SearchService
 
 
 class ApiTests(unittest.TestCase):
@@ -246,6 +248,31 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(payload["inn"], "7701234567")
         self.assertEqual(payload["region"], "Москва")
         self.assertTrue(payload["viewedCategories"])
+
+    def test_runtime_personalization_predictor_returns_reason_codes(self) -> None:
+        search_service = SearchService(
+            search_db_path=self.search_db_path,
+            synonyms_path=self.synonyms_path,
+            semantic_backend="sqlite",
+        )
+        runtime_service = PersonalizationRuntimeService(db_path=self.preprocessed_db_path)
+        try:
+            search_payload = search_service.search(query="канцелярские ручки", top_k=5)
+            reranked = runtime_service.rerank_candidates(
+                query=str(search_payload["query"]["corrected_query"] or search_payload["query"]["normalized_query"]),
+                candidates=list(search_payload["results"]),
+                user_id="user-7701234567",
+                customer_inn="7701234567",
+                customer_region="Москва",
+                session_categories=["Ручки канцелярские"],
+            )
+            self.assertTrue(reranked)
+            self.assertEqual(reranked[0]["ste_id"], "ste-1")
+            self.assertGreater(reranked[0]["personalization_score"], 0.0)
+            self.assertIn("USER_CATEGORY_AFFINITY", reranked[0]["top_reason_codes"])
+        finally:
+            search_service.close()
+            runtime_service.close()
 
     def test_search_returns_personalized_product_shape(self) -> None:
         response = self.client.post(

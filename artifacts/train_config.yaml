@@ -1,0 +1,46 @@
+{
+  "seed": 42,
+  "paths": {
+    "artifacts_dir": "artifacts",
+    "reports_dir": "reports"
+  },
+  "ranking_dataset": {
+    "query_variants": [
+      "contract_item_name",
+      "ste_name",
+      "contract_plus_category",
+      "ste_name_plus_category",
+      "ste_name_category_attributes"
+    ],
+    "random_negatives": 2,
+    "same_category_negatives": 2,
+    "similar_text_negatives": 2,
+    "max_positive_events_total": 60000,
+    "max_positive_events_per_user": 250,
+    "deduplicate_contract_keys": true
+  },
+  "time_split": {
+    "strategy": "ratio",
+    "train_ratio": 0.7,
+    "val_ratio": 0.15
+  },
+  "evaluation": {
+    "active_user_threshold": 5
+  },
+  "catboost": {
+    "enabled": true,
+    "pairwise_benchmark": true,
+    "loss_function": "YetiRank",
+    "eval_metric": "NDCG:top=10",
+    "iterations": 500,
+    "learning_rate": 0.05,
+    "depth": 6,
+    "l2_leaf_reg": 6.0,
+    "random_strength": 0.5,
+    "subsample": 0.8,
+    "random_seed": 42,
+    "early_stopping_rounds": 50,
+    "verbose": 100,
+    "use_best_model": true
+  }
+}

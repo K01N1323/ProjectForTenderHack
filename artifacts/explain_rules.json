@@ -1,0 +1,53 @@
+{
+  "rules": [
+    {
+      "code": "QUERY_NAME_MATCH",
+      "template": "Запрос хорошо совпадает с названием СТЕ",
+      "feature": "query_name_token_overlap",
+      "threshold": 0.6
+    },
+    {
+      "code": "USER_CATEGORY_AFFINITY",
+      "template": "Заказчик часто закупает эту категорию",
+      "feature": "user_category_purchase_share",
+      "threshold": 0.2
+    },
+    {
+      "code": "USER_REPEAT_BUY",
+      "template": "Похожий СТЕ уже закупался ранее",
+      "feature": "user_repeat_buy_signal",
+      "threshold": 0.5
+    },
+    {
+      "code": "RECENT_SIMILAR_PURCHASE",
+      "template": "Похожий СТЕ уже закупался недавно",
+      "feature": "user_last_category_recency_days",
+      "threshold": 45.0,
+      "direction": "lte"
+    },
+    {
+      "code": "SUPPLIER_AFFINITY",
+      "template": "Этот поставщик часто встречается в истории закупок",
+      "feature": "candidate_supplier_affinity",
+      "threshold": 0.1
+    },
+    {
+      "code": "PRICE_IN_RANGE",
+      "template": "Цена близка к типичному диапазону закупок заказчика",
+      "feature": "candidate_price_in_user_range",
+      "threshold": 0.5
+    },
+    {
+      "code": "REGIONAL_POPULARITY",
+      "template": "СТЕ популярно у заказчиков этого региона",
+      "feature": "regional_ste_popularity",
+      "threshold": 1.0
+    },
+    {
+      "code": "SIMILAR_CUSTOMER_POPULARITY",
+      "template": "Позиция популярна у похожих заказчиков",
+      "feature": "similar_customer_ste_popularity",
+      "threshold": 1.0
+    }
+  ]
+}

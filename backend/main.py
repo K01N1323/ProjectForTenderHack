@@ -20,6 +20,7 @@ if str(SRC_ROOT) not in sys.path:
 
 from tenderhack.offers import OfferLookupService
 from tenderhack.personalization import PersonalizationService
+from tenderhack.personalization_runtime import PersonalizationRuntimeService
 from tenderhack.search import SearchService
 from tenderhack.text import normalize_text, unique_preserve_order
 
@@ -30,6 +31,7 @@ class AppSettings:
     preprocessed_db_path: Path = PROJECT_ROOT / "data" / "processed" / "tenderhack_preprocessed.sqlite"
     synonyms_path: Path = PROJECT_ROOT / "data" / "reference" / "search_synonyms.json"
     fasttext_model_path: Path = PROJECT_ROOT / "data" / "processed" / "tenderhack_fasttext.bin"
+    personalization_model_path: Path = PROJECT_ROOT / "artifacts" / "personalization_model.cbm"
     semantic_backend: str = "auto"
 
     @classmethod
@@ -39,6 +41,9 @@ class AppSettings:
             preprocessed_db_path=Path(os.getenv("TENDERHACK_PREPROCESSED_DB", cls.preprocessed_db_path)),
             synonyms_path=Path(os.getenv("TENDERHACK_SYNONYMS_PATH", cls.synonyms_path)),
             fasttext_model_path=Path(os.getenv("TENDERHACK_FASTTEXT_MODEL_PATH", cls.fasttext_model_path)),
+            personalization_model_path=Path(
+                os.getenv("TENDERHACK_PERSONALIZATION_MODEL_PATH", cls.personalization_model_path)
+            ),
             semantic_backend=os.getenv("TENDERHACK_SEMANTIC_BACKEND", cls.semantic_backend),
         )
 
@@ -95,11 +100,16 @@ class TenderHackApiService:
             fasttext_model_path=settings.fasttext_model_path,
         )
         self.personalization_service = PersonalizationService(db_path=settings.preprocessed_db_path)
+        self.personalization_runtime_service = PersonalizationRuntimeService(
+            db_path=settings.preprocessed_db_path,
+            model_path=settings.personalization_model_path,
+        )
         self.offer_lookup_service = OfferLookupService(db_path=settings.preprocessed_db_path)
 
     def close(self) -> None:
         self.search_service.close()
         self.personalization_service.close()
+        self.personalization_runtime_service.close()
         self.offer_lookup_service.close()
 
     def _validate_required_paths(self) -> None:
@@ -132,22 +142,25 @@ class TenderHackApiService:
         session_categories = unique_preserve_order(payload.viewedCategories + user_context.viewedCategories)
         bounced_categories = {normalize_text(value) for value in payload.bouncedCategories if value}
 
-        if user_context.inn:
-            customer_profile = self.personalization_service.build_customer_profile(
+        if user_context.inn or user_context.region or session_categories:
+            personalization_query = (
+                raw_payload["query"].get("corrected_query")
+                or raw_payload["query"].get("normalized_query")
+                or payload.query
+            )
+            results = self.personalization_runtime_service.rerank_candidates(
+                query=str(personalization_query),
+                candidates=results,
+                user_id=user_context.id or (f"user-{user_context.inn}" if user_context.inn else "anonymous"),
                 customer_inn=user_context.inn,
                 customer_region=user_context.region,
-            )
-            results = self.personalization_service.rerank_ste(
-                results,
-                customer_profile=customer_profile,
-                session_state={
-                    "recent_categories": session_categories,
-                },
+                session_categories=session_categories,
             )
         else:
             for item in results:
                 item["final_score"] = item.get("search_score", 0.0)
-                item["explanation"] = ["оставлено выше за счёт базовой текстовой релевантности"]
+                item["top_reason_codes"] = []
+                item["reasons"] = ["оставлено выше за счёт базовой текстовой релевантности"]
 
         for item in results:
             category_norm = normalize_text(str(item.get("category", "")))
@@ -173,7 +186,9 @@ class TenderHackApiService:
             ste_id = str(item["ste_id"])
             offer = offer_lookup.get(ste_id, {})
             reason_to_show = self._map_reason_to_show(
-                explanation=item.get("explanation", []),
+                reason_codes=item.get("top_reason_codes", []),
+                category=str(item.get("category") or ""),
+                session_categories=session_categories,
                 is_bounced=bool(item.get("reason_to_hide")),
             )
             products.append(
@@ -209,17 +224,26 @@ class TenderHackApiService:
         return unique_preserve_order(suggestions)[:top_k]
 
     @staticmethod
-    def _map_reason_to_show(explanation: List[str], is_bounced: bool) -> Optional[str]:
+    def _map_reason_to_show(
+        reason_codes: List[str],
+        category: str,
+        session_categories: List[str],
+        is_bounced: bool,
+    ) -> Optional[str]:
         if is_bounced:
             return None
-        for item in explanation:
-            lowered = normalize_text(item)
-            if "часто закупалось" in lowered or "ранее выбранные категории" in lowered:
-                return "На основе ваших закупок"
-            if "того же региона" in lowered or "регион" in lowered:
-                return "Популярно в вашем регионе"
-            if "клика" in lowered or "сессии" in lowered:
-                return "Продолжить подбор в этой категории"
+        codes = {str(code) for code in reason_codes}
+        session_category_set = {normalize_text(value) for value in session_categories if value}
+        category_norm = normalize_text(category)
+
+        if codes & {"USER_CATEGORY_AFFINITY", "USER_REPEAT_BUY", "RECENT_SIMILAR_PURCHASE", "SUPPLIER_AFFINITY"}:
+            return "На основе ваших закупок"
+        if "REGIONAL_POPULARITY" in codes:
+            return "Популярно в вашем регионе"
+        if "SIMILAR_CUSTOMER_POPULARITY" in codes:
+            return "Популярно у похожих заказчиков"
+        if category_norm and category_norm in session_category_set:
+            return "Продолжить подбор в этой категории"
         return None
 
 
