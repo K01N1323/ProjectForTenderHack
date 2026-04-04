@@ -25,31 +25,8 @@ from tenderhack.offers import OfferLookupService
 from tenderhack.personalization import PersonalizationService
 from tenderhack.personalization_runtime import PersonalizationRuntimeService
 from tenderhack.search import SearchService
-from tenderhack.search_rerank_model import SearchRerankPredictor
 from tenderhack.text import normalize_text, stem_token, tokenize, unique_preserve_order
 from tenderhack.penalization import InMemorySkipStorage, InteractionTracker, RankingModifier
-
-
-def _discover_search_rerank_model_path(project_root: Path) -> Path:
-    candidates = [
-        project_root / "data" / "processed" / "tenderhack_yeti_ranker.cbm",
-        project_root / "data" / "processed" / "tenderhack_yeti_ranker_small.cbm",
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    return candidates[0]
-
-
-def _discover_search_rerank_metadata_path(project_root: Path) -> Path:
-    candidates = [
-        project_root / "data" / "processed" / "tenderhack_yeti_ranker.json",
-        project_root / "data" / "processed" / "tenderhack_yeti_ranker_small.json",
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    return candidates[0]
 
 
 @dataclass
