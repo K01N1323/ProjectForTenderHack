@@ -146,6 +146,7 @@ class ProductPayload(BaseModel):
     name: str
     category: str
     price: float
+    offerCount: int = 0
     supplierInn: str
     descriptionPreview: Optional[str] = None
     reasonToShow: Optional[str] = None
@@ -196,9 +197,9 @@ class EventResponsePayload(BaseModel):
 
 
 class TenderHackApiService:
-    LOGIN_CACHE_VERSION = 5
-    SEARCH_CACHE_VERSION = 6
-    SUGGESTIONS_CACHE_VERSION = 11
+    LOGIN_CACHE_VERSION = 6
+    SEARCH_CACHE_VERSION = 7
+    SUGGESTIONS_CACHE_VERSION = 15
 
     def __init__(self, settings: AppSettings) -> None:
         self.settings = settings
@@ -461,6 +462,7 @@ class TenderHackApiService:
                     name=str(item.get("clean_name") or item.get("normalized_name") or ste_id),
                     category=str(item.get("category") or ""),
                     price=round(float(offer.get("price", 0.0)), 2),
+                    offerCount=int(offer.get("offer_count") or 0),
                     supplierInn=str(offer.get("supplier_inn") or "не указан"),
                     descriptionPreview=description_lookup.get(ste_id),
                     reasonToShow=reason_to_show,
@@ -552,6 +554,12 @@ class TenderHackApiService:
             query=query,
             products=self._resolve_suggestion_products(user_inn=user_inn),
         )
+        if short_personalized_prefix and same_type_prefix_suggestions:
+            product_suggestions = [
+                item
+                for item in product_suggestions
+                if str(item.reason or "") == "Часто закупалось"
+            ]
         category_suggestions = self._build_personalized_category_suggestions(
             query=query,
             categories=self._resolve_suggestion_categories(
@@ -560,9 +568,9 @@ class TenderHackApiService:
                 top_categories=top_categories or [],
             ),
         )
-        suggestion_groups = [same_type_prefix_suggestions]
+        suggestion_groups = [product_suggestions, same_type_prefix_suggestions]
         if not (short_personalized_prefix and same_type_prefix_suggestions):
-            suggestion_groups.extend([product_suggestions, category_suggestions])
+            suggestion_groups.append(category_suggestions)
         suggestions = self._merge_suggestion_groups(*suggestion_groups)
         if corrected_query and corrected_query != normalized_query:
             suggestions.append(
@@ -1273,7 +1281,9 @@ class TenderHackApiService:
 
             item_reason = str(item.get("reason") or "")
             normalized_reason = item_reason.lower()
-            if "того же типа" in normalized_reason or "рекомендуется для" in normalized_reason:
+            if "часто закупалось учреждением" in normalized_reason:
+                reason = "Часто закупалось"
+            elif "того же типа" in normalized_reason or "рекомендуется для" in normalized_reason:
                 reason = "По типу учреждения"
             elif "похожих учреждений" in normalized_reason:
                 reason = "Популярно у похожих учреждений"
@@ -1323,9 +1333,6 @@ class TenderHackApiService:
             if normalized_text not in deduped_by_text:
                 deduped_by_text[normalized_text] = item
                 order.append(normalized_text)
-                continue
-            if item.score > deduped_by_text[normalized_text].score:
-                deduped_by_text[normalized_text] = item
         return [deduped_by_text[key] for key in order]
 
     @staticmethod

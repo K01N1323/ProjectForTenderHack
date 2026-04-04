@@ -65,6 +65,10 @@ const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
                             <span className="text-[#3e6ea7]">{product.id}</span>
                         </div>
                         <div>
+                            <span className="font-semibold">Предложений: </span>
+                            <span className="text-[#3e6ea7]">{product.offerCount}</span>
+                        </div>
+                        <div>
                             <span className="font-semibold">Поставщик: </span>
                             <span className="text-[#3e6ea7] break-all">{product.supplierInn || 'не указан'}</span>
                         </div>
@@ -125,6 +129,10 @@ const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
                                 <div>
                                     <span className="font-semibold">ID СТЕ </span>
                                     <span className="text-[#3e6ea7]">{product.id}</span>
+                                </div>
+                                <div>
+                                    <span className="font-semibold">Предложений: </span>
+                                    <span className="text-[#3e6ea7]">{product.offerCount}</span>
                                 </div>
                                 <div>
                                     <span className="font-semibold">Поставщик: </span>

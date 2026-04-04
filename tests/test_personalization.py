@@ -157,12 +157,14 @@ class PersonalizationServiceTests(unittest.TestCase):
         self.assertEqual(profile["top_categories"][0]["category"], "ИММУНОДЕПРЕССАНТЫ,L04")
         self.assertEqual(profile["top_ste"][0]["ste_id"], "ste-immune-1")
 
-    def test_build_customer_profile_generates_region_and_peer_backfill_recommendations(self) -> None:
+    def test_build_customer_profile_generates_peer_and_type_backfill_recommendations(self) -> None:
         profile = self.service.build_customer_profile("cust-1")
         recommended_categories = profile["recommended_categories"]
         recommended_ste = profile["recommended_ste"]
 
         self.assertEqual(recommended_categories[0]["category"], "ИММУНОДЕПРЕССАНТЫ,L04")
+        self.assertTrue(all(float(item.get("region_weight", 0.0) or 0.0) == 0.0 for item in recommended_categories))
+        self.assertTrue(all(float(item.get("region_weight", 0.0) or 0.0) == 0.0 for item in recommended_ste))
         self.assertTrue(
             any(
                 item["category"] == "Расходные материалы и комплектующие для лазерных принтеров и МФУ"
@@ -228,7 +230,7 @@ class PersonalizationServiceTests(unittest.TestCase):
         self.assertIn("часто закупалось этой организацией", reranked[0]["explanation"])
         self.assertGreater(reranked[0]["final_score"], reranked[1]["final_score"])
 
-    def test_rerank_offers_prefers_matching_offer_with_region_and_session(self) -> None:
+    def test_rerank_offers_prefers_matching_offer_with_history_and_session(self) -> None:
         profile = self.service.build_customer_profile("cust-1")
         offers = [
             {
@@ -254,7 +256,9 @@ class PersonalizationServiceTests(unittest.TestCase):
             session_state={"clicked_ste_ids": [], "cart_ste_ids": ["ste-immune-1"], "recent_categories": ["иммунодепрессанты l04"]},
         )
         self.assertEqual(reranked[0]["offer_id"], "offer-1")
-        self.assertIn("регион поставки совпадает с регионом заказчика", reranked[0]["offer_explanation"])
+        self.assertIn("СТЕ уже часто закупалось этой организацией", reranked[0]["offer_explanation"])
+        self.assertEqual(reranked[0]["offer_personalization_features"]["region_match_boost"], 0.0)
+        self.assertEqual(reranked[0]["offer_personalization_features"]["region_affinity"], 0.0)
         self.assertGreater(reranked[0]["final_offer_score"], reranked[1]["final_offer_score"])
 
 

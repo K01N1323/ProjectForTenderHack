@@ -86,21 +86,21 @@ INSTITUTION_ARCHETYPE_KEYWORDS = {
 }
 
 ARCHETYPE_CATEGORY_BLEND_WEIGHTS = {
-    "healthcare": {"institution": 4.9, "peer": 2.7, "region": 0.9, "archetype": 1.9, "diversity": 0.12},
-    "education": {"institution": 4.5, "peer": 2.5, "region": 1.0, "archetype": 1.7, "diversity": 0.12},
-    "office_admin": {"institution": 4.1, "peer": 1.9, "region": 1.7, "archetype": 1.4, "diversity": 0.10},
-    "facilities": {"institution": 4.0, "peer": 1.8, "region": 1.9, "archetype": 1.4, "diversity": 0.10},
-    "security_it": {"institution": 4.7, "peer": 2.4, "region": 1.0, "archetype": 1.8, "diversity": 0.11},
-    "general": {"institution": 4.3, "peer": 2.1, "region": 1.4, "archetype": 0.0, "diversity": 0.10},
+    "healthcare": {"institution": 4.9, "peer": 2.7, "region": 0.0, "archetype": 1.9, "diversity": 0.12},
+    "education": {"institution": 4.5, "peer": 2.5, "region": 0.0, "archetype": 1.7, "diversity": 0.12},
+    "office_admin": {"institution": 4.1, "peer": 1.9, "region": 0.0, "archetype": 1.4, "diversity": 0.10},
+    "facilities": {"institution": 4.0, "peer": 1.8, "region": 0.0, "archetype": 1.4, "diversity": 0.10},
+    "security_it": {"institution": 4.7, "peer": 2.4, "region": 0.0, "archetype": 1.8, "diversity": 0.11},
+    "general": {"institution": 4.3, "peer": 2.1, "region": 0.0, "archetype": 0.0, "diversity": 0.10},
 }
 
 ARCHETYPE_STE_BLEND_WEIGHTS = {
-    "healthcare": {"institution": 5.2, "peer": 2.6, "region": 0.8, "archetype": 1.8, "diversity": 0.10},
-    "education": {"institution": 4.8, "peer": 2.4, "region": 0.9, "archetype": 1.6, "diversity": 0.10},
-    "office_admin": {"institution": 4.4, "peer": 1.8, "region": 1.5, "archetype": 1.3, "diversity": 0.09},
-    "facilities": {"institution": 4.3, "peer": 1.8, "region": 1.6, "archetype": 1.3, "diversity": 0.09},
-    "security_it": {"institution": 4.9, "peer": 2.3, "region": 0.9, "archetype": 1.7, "diversity": 0.09},
-    "general": {"institution": 4.6, "peer": 2.0, "region": 1.2, "archetype": 0.0, "diversity": 0.09},
+    "healthcare": {"institution": 5.2, "peer": 2.6, "region": 0.0, "archetype": 1.8, "diversity": 0.10},
+    "education": {"institution": 4.8, "peer": 2.4, "region": 0.0, "archetype": 1.6, "diversity": 0.10},
+    "office_admin": {"institution": 4.4, "peer": 1.8, "region": 0.0, "archetype": 1.3, "diversity": 0.09},
+    "facilities": {"institution": 4.3, "peer": 1.8, "region": 0.0, "archetype": 1.3, "diversity": 0.09},
+    "security_it": {"institution": 4.9, "peer": 2.3, "region": 0.0, "archetype": 1.7, "diversity": 0.09},
+    "general": {"institution": 4.6, "peer": 2.0, "region": 0.0, "archetype": 0.0, "diversity": 0.09},
 }
 
 ARCHETYPE_KEYWORD_STEMS = {
@@ -184,34 +184,13 @@ class PersonalizationService:
             (customer_inn, top_ste),
         ).fetchall()
 
-        top_regional_categories: List[sqlite3.Row] = []
-        if customer_region:
-            top_regional_categories = self.conn.execute(
-                """
-                SELECT
-                    rc.category_id,
-                    cl.category,
-                    cl.normalized_category,
-                    rc.purchase_count,
-                    rc.total_amount,
-                    rc.first_purchase_dt,
-                    rc.last_purchase_dt
-                FROM region_category_stats rc
-                JOIN category_lookup cl ON cl.category_id = rc.category_id
-                WHERE rc.customer_region = ?
-                ORDER BY rc.purchase_count DESC, rc.total_amount DESC
-                LIMIT ?
-                """,
-                (customer_region, top_region_categories),
-            ).fetchall()
-
         category_preferences = self._weight_category_rows(top_customer_categories)
         ste_preferences = self._weight_ste_rows(top_customer_ste)
-        region_preferences = self._weight_category_rows(top_regional_categories)
+        region_preferences: List[Dict[str, object]] = []
         institution_archetype, institution_archetype_scores = self._infer_institution_archetype(category_preferences)
         same_type_peer_customer_inns = self._load_same_type_peer_customer_inns(
             customer_inn=customer_inn,
-            customer_region=customer_region,
+            customer_region=None,
             archetype=institution_archetype,
             limit=120,
         )
@@ -227,7 +206,7 @@ class PersonalizationService:
         else:
             archetype_category_rows = self._load_archetype_category_rows(
                 archetype=institution_archetype,
-                customer_region=customer_region,
+                customer_region=None,
                 limit=max(top_categories, top_region_categories),
             )
             archetype_category_preferences = self._weight_category_rows(archetype_category_rows)
@@ -238,7 +217,7 @@ class PersonalizationService:
         top_category_ids = [int(row["category_id"]) for row in top_customer_categories[: min(3, len(top_customer_categories))]]
         peer_customer_inns = self._load_peer_customer_inns(
             customer_inn=customer_inn,
-            customer_region=customer_region,
+            customer_region=None,
             category_ids=top_category_ids,
         )
         peer_category_preferences = self._weight_category_rows(
@@ -247,13 +226,7 @@ class PersonalizationService:
         peer_ste_preferences = self._weight_ste_rows(
             self._load_peer_ste_rows(peer_customer_inns, limit=max(top_ste, 24))
         )
-        regional_ste_preferences = self._weight_ste_rows(
-            self._load_regional_ste_rows(
-                customer_region=customer_region,
-                category_ids=top_category_ids,
-                limit=max(top_ste, 24),
-            )
-        )
+        regional_ste_preferences: List[Dict[str, object]] = []
         archetype_ste_preferences = self._weight_ste_rows(
             self._load_peer_ste_rows(same_type_peer_customer_inns, limit=max(top_ste, 24))
         )
@@ -261,7 +234,7 @@ class PersonalizationService:
             archetype_ste_preferences = self._weight_ste_rows(
                 self._load_archetype_ste_rows(
                     archetype=institution_archetype,
-                    customer_region=customer_region,
+                    customer_region=None,
                     category_ids=archetype_category_ids,
                     limit=max(top_ste, 24),
                 )
@@ -742,21 +715,15 @@ class PersonalizationService:
         archetype_weight: float,
     ) -> str:
         archetype_label = INSTITUTION_ARCHETYPE_LABELS.get(archetype, INSTITUTION_ARCHETYPE_LABELS["general"])
-        if institution_weight > 0 and (peer_weight > 0 or region_weight > 0):
-            return "Часто закупалось учреждением и поддержано региональным спросом"
-        if institution_weight > 0 and archetype_weight > 0:
+        if institution_weight > 0 and (peer_weight > 0 or archetype_weight > 0):
             return "Часто закупалось учреждением и поддержано закупками учреждений того же типа"
         if institution_weight > 0:
             return "Часто закупалось учреждением"
-        if peer_weight > 0 and region_weight > 0:
-            return f"Популярно у похожих {archetype_label} этого региона"
         if peer_weight > 0:
             return f"Популярно у похожих {archetype_label}"
-        if archetype_weight > 0 and region_weight > 0:
-            return f"Популярно у учреждений того же типа и в регионе"
         if archetype_weight > 0:
             return f"Популярно у учреждений того же типа ({archetype_label})"
-        return "Популярно в регионе"
+        return "Популярно у похожих учреждений"
 
     @classmethod
     def _merge_category_preferences(
@@ -812,7 +779,7 @@ class PersonalizationService:
                 + float(weights["region"]) * region_weight
                 + float(weights["archetype"]) * archetype_weight
                 + float(weights["diversity"])
-                * sum(1 for value in [institution_weight, peer_weight, region_weight, archetype_weight] if value > 0)
+                * sum(1 for value in [institution_weight, peer_weight, archetype_weight] if value > 0)
             )
             payload["recommendation_score"] = round(recommendation_score, 4)
             payload["reason"] = cls._category_reason(
@@ -846,21 +813,15 @@ class PersonalizationService:
         archetype_weight: float,
     ) -> str:
         archetype_label = INSTITUTION_ARCHETYPE_LABELS.get(archetype, INSTITUTION_ARCHETYPE_LABELS["general"])
-        if institution_weight > 0 and (peer_weight > 0 or region_weight > 0):
-            return "Часто закупалось учреждением и встречается в похожем региональном профиле"
-        if institution_weight > 0 and archetype_weight > 0:
+        if institution_weight > 0 and (peer_weight > 0 or archetype_weight > 0):
             return "Часто закупалось учреждением и поддержано закупками учреждений того же типа"
         if institution_weight > 0:
             return "Часто закупалось учреждением"
-        if peer_weight > 0 and region_weight > 0:
-            return f"Популярно у похожих {archetype_label} региона"
         if peer_weight > 0:
             return f"Популярно у похожих {archetype_label}"
-        if archetype_weight > 0 and region_weight > 0:
-            return "Популярно у учреждений того же типа и в регионе"
         if archetype_weight > 0:
             return f"Популярно у учреждений того же типа ({archetype_label})"
-        return "Популярно в регионе"
+        return "Популярно у похожих учреждений"
 
     @classmethod
     def _merge_ste_preferences(
@@ -918,7 +879,7 @@ class PersonalizationService:
                 + float(weights["region"]) * region_weight
                 + float(weights["archetype"]) * archetype_weight
                 + float(weights["diversity"])
-                * sum(1 for value in [institution_weight, peer_weight, region_weight, archetype_weight] if value > 0)
+                * sum(1 for value in [institution_weight, peer_weight, archetype_weight] if value > 0)
             )
             payload["weight"] = round(max(institution_weight, peer_weight, region_weight, archetype_weight), 4)
             payload["recommendation_score"] = round(recommendation_score, 4)
@@ -1006,8 +967,6 @@ class PersonalizationService:
         session = SessionState.from_mapping(session_state)
         category_affinity = customer_profile.get("category_affinity", {})
         ste_affinity = customer_profile.get("ste_affinity", {})
-        regional_affinity = customer_profile.get("regional_affinity", {})
-
         reranked: List[Dict[str, object]] = []
         for index, result in enumerate(results, start=1):
             category_norm = normalize_text(str(result.get("category", "")))
@@ -1016,14 +975,13 @@ class PersonalizationService:
 
             history_affinity = float(ste_affinity.get(ste_id, 0.0))
             category_score = self._best_category_affinity(category_norm, customer_profile.get("top_categories", []))
-            region_score = self._best_category_affinity(category_norm, customer_profile.get("regional_categories", []))
+            region_score = 0.0
             session_boost = self._session_boost(result, session)
 
             final_score = (
                 base_score
                 + 5.0 * history_affinity
                 + 3.0 * category_score
-                + 2.0 * region_score
                 + 4.0 * session_boost
             )
 
@@ -1070,18 +1028,14 @@ class PersonalizationService:
         for index, offer in enumerate(offers, start=1):
             ste_id = str(offer.get("ste_id", ""))
             category_norm = normalize_text(str(offer.get("category", "")))
-            supplier_region = normalize_text(str(offer.get("supplier_region", "")))
             base_score = float(offer.get("offer_score", offer.get("search_score", 0.0)))
 
             history_affinity = float(customer_profile.get("ste_affinity", {}).get(ste_id, 0.0))
             category_affinity = self._best_category_affinity(category_norm, customer_profile.get("top_categories", []))
-            region_affinity = self._best_category_affinity(category_norm, customer_profile.get("regional_categories", []))
+            region_affinity = 0.0
             session_boost = self._session_boost({"ste_id": ste_id, "category": category_norm}, session)
 
             region_match_boost = 0.0
-            customer_region = normalize_text(str(customer_profile.get("customer_region", "")))
-            if customer_region and supplier_region and customer_region == supplier_region:
-                region_match_boost = 0.35
 
             unit_price = float(offer.get("unit_price", 0.0) or 0.0)
             price_bonus = 0.0
@@ -1092,9 +1046,7 @@ class PersonalizationService:
                 base_score
                 + 4.0 * history_affinity
                 + 3.0 * category_affinity
-                + 2.0 * region_affinity
                 + 3.0 * session_boost
-                + 1.5 * region_match_boost
                 + 1.5 * price_bonus
             )
 
@@ -1103,8 +1055,6 @@ class PersonalizationService:
                 explanation.append("СТЕ уже часто закупалось этой организацией")
             if category_affinity >= 0.20:
                 explanation.append("оффер относится к предпочитаемой категории")
-            if region_match_boost > 0:
-                explanation.append("регион поставки совпадает с регионом заказчика")
             if price_bonus >= 0.20:
                 explanation.append("цена выгоднее части альтернатив")
             if session_boost >= 0.35:
@@ -1162,8 +1112,6 @@ class PersonalizationService:
             explanation.append("часто закупалось этой организацией")
         if category_affinity >= 0.20:
             explanation.append("похоже на ранее выбранные категории")
-        if region_affinity >= 0.20:
-            explanation.append("популярно у заказчиков того же региона")
         if session_boost >= 0.35:
             explanation.append("поднято после клика или добавления в корзину")
         if not explanation:

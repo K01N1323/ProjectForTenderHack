@@ -586,6 +586,7 @@ class ApiTests(unittest.TestCase):
         self.assertIs(payload["has_more"], False)
         self.assertEqual(payload["items"][0]["id"], "ste-1")
         self.assertEqual(payload["items"][0]["supplierInn"], "1234567890")
+        self.assertEqual(payload["items"][0]["offerCount"], 4)
         self.assertAlmostEqual(payload["items"][0]["price"], 199.99)
         self.assertIn("Цвет", payload["items"][0]["descriptionPreview"])
         self.assertEqual(payload["items"][0]["reasonToShow"], "На основе ваших закупок")

@@ -108,9 +108,11 @@ class PersonalizationRuntimeService:
             "reference_date": active_date.isoformat(),
             "user_id": user_id,
         }
+        model_user_profile = dict(user_profile)
+        model_user_profile["customer_region"] = ""
         predictions = self.predictor.predict_personalization(
             candidates=enriched_candidates,
-            user_profile=user_profile,
+            user_profile=model_user_profile,
             query_features=query_features,
         )
         predictions_by_id = {str(item["candidate_id"]): item for item in predictions}
@@ -388,9 +390,7 @@ class PersonalizationRuntimeService:
 
         offer_lookup = self._load_offer_lookup(ste_ids)
         global_ste_stats = self._load_global_ste_stats(ste_ids)
-        regional_ste_stats = self._load_regional_ste_stats(ste_ids, customer_region)
         global_category_stats = self._load_global_category_stats(normalized_categories)
-        regional_category_stats = self._load_regional_category_stats(normalized_categories, customer_region)
         recent_ste_stats = self._load_recent_ste_stats(ste_ids, cutoff_date=reference_date - timedelta(days=30))
         recent_category_stats = self._load_recent_category_stats(
             normalized_categories,
@@ -401,7 +401,7 @@ class PersonalizationRuntimeService:
         dominant_category = self._dominant_category(user_profile)
         similar_customer_stats = self._load_similar_customer_ste_stats(
             ste_ids=ste_ids,
-            customer_region=customer_region,
+            customer_region="",
             normalized_category=dominant_category,
         )
         same_type_customer_stats = self._load_same_type_customer_ste_stats(
@@ -420,7 +420,7 @@ class PersonalizationRuntimeService:
             ste_stats = global_ste_stats.get(ste_id, {})
             price_bands = category_price_bands.get(normalized_category, {})
             payload["candidate_id"] = ste_id
-            payload["customer_region"] = customer_region or ""
+            payload["customer_region"] = ""
             payload["candidate_primary_supplier_inn"] = str(offer.get("supplier_inn") or "")
             payload["candidate_primary_supplier_region"] = str(offer.get("supplier_region") or "")
             payload["candidate_primary_supplier_share"] = 0.0
@@ -439,12 +439,8 @@ class PersonalizationRuntimeService:
             payload["global_category_popularity"] = float(
                 global_category_stats.get(normalized_category, {}).get("purchase_count", 0.0) or 0.0
             )
-            payload["regional_ste_popularity"] = float(
-                regional_ste_stats.get(ste_id, {}).get("purchase_count", 0.0) or 0.0
-            )
-            payload["regional_category_popularity"] = float(
-                regional_category_stats.get(normalized_category, {}).get("purchase_count", 0.0) or 0.0
-            )
+            payload["regional_ste_popularity"] = 0.0
+            payload["regional_category_popularity"] = 0.0
             payload["similar_customer_ste_popularity"] = float(
                 max(
                     similar_customer_stats.get(ste_id, {}).get("purchase_count", 0.0) or 0.0,

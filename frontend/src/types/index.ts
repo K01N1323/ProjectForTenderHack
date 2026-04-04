@@ -26,6 +26,7 @@ export interface Product {
     name: string;
     category: string;
     price: number;
+    offerCount: number;
     supplierInn: string;
     descriptionPreview?: string;
     reasonToShow?: string; 
