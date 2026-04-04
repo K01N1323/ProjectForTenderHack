@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Iterable, List
+from typing import Iterable, List, Tuple
 
 
 TOKEN_RE = re.compile(r"[0-9A-Za-zА-Яа-яЁё]+")
@@ -171,3 +171,69 @@ def unique_preserve_order(items: Iterable[str]) -> List[str]:
         seen.add(item)
         result.append(item)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Attribute extraction  (value + unit pairs like "500 мг", "16 гб", "a4")
+# ---------------------------------------------------------------------------
+
+# Known measurement units — lowercase, ё→е already applied by normalize_text
+_UNITS = {
+    # Mass / dosage
+    "мкг", "мг", "г", "кг",
+    # Volume
+    "мл", "л", "дл",
+    # Length / area
+    "нм", "мкм", "мм", "см", "м", "км", "м2",
+    # Digital storage
+    "б", "кб", "мб", "гб", "тб", "mb", "gb", "tb", "kb",
+    # Electrical
+    "ма", "а", "мв", "в", "квт", "вт", "ом", "мом",
+    # Frequency
+    "гц", "кгц", "мгц", "ггц", "hz", "mhz", "ghz",
+    # Capacitance
+    "пф", "нф", "мкф",
+    # Interface / version markers frequently appearing after a number
+    "usb", "rpm", "dpi",
+    # Pharma / packaging
+    "таб", "капс", "амп", "фл", "шт", "уп",
+    # Paper format shorthand (a3, a4, a5 etc.)
+    "a3", "a4", "a5", "a6",
+}
+
+# Regex: a sequence of digits (possibly with decimal comma/dot), optionally
+# followed immediately or after a space by a known unit token.
+_ATTR_RE = re.compile(
+    r"(\d+(?:[.,]\d+)?)\s*(" + "|".join(re.escape(u) for u in sorted(_UNITS, key=len, reverse=True)) + r")\b",
+    re.IGNORECASE,
+)
+
+# Also catch standalone format tokens like "a4", "usb", "usb3" that contain
+# no digit in the value part — these are already matched via the unit list.
+
+def extract_attribute_spans(query: str) -> List[Tuple[str, str]]:
+    """Return a list of (value, unit) pairs found in *query*.
+
+    The query should already be normalised (lower-case, ё→е).
+
+    Examples
+    --------
+    >>> extract_attribute_spans("парацетамол 500 мг таблетки")
+    [('500', 'мг')]
+    >>> extract_attribute_spans("флешка 16 гб usb 3 0")
+    [('16', 'гб')]
+    >>> extract_attribute_spans("бумага a4 100 г м2")
+    [('100', 'г')]
+    """
+    normalized = normalize_text(query)
+    spans: List[Tuple[str, str]] = []
+    seen: set = set()
+    for m in _ATTR_RE.finditer(normalized):
+        value = m.group(1).replace(",", ".")
+        unit = m.group(2).lower()
+        key = (value, unit)
+        if key not in seen:
+            seen.add(key)
+            spans.append(key)
+    return spans
+

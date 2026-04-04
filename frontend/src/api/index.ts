@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { SearchResponse, User } from '../types';
+import { AutocompleteSuggestion, SearchResponse, User } from '../types';
 
 const api = axios.create({
     baseURL: import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000',
@@ -24,11 +24,18 @@ export interface SearchEventPayload {
     durationMs?: number;
 }
 
+export interface SearchProductsOptions {
+    limit?: number;
+    offset?: number;
+    minScore?: number;
+}
+
 export const searchProducts = async (
     query: string,
     user: User | null,
     viewedCategories: string[],
     bouncedCategories: string[],
+    options: SearchProductsOptions = {},
 ): Promise<SearchResponse> => {
     const response = await api.post<SearchResponse>('/api/search', {
         query,
@@ -42,16 +49,41 @@ export const searchProducts = async (
             : null,
         viewedCategories,
         bouncedCategories,
+        limit: options.limit,
+        offset: options.offset ?? 0,
+        min_score: options.minScore ?? 0.55,
     });
     return response.data;
 };
 
-export const getSuggestions = async (query: string): Promise<string[]> => {
+export const getSuggestions = async (
+    query: string,
+    user: User | null,
+    viewedCategories: string[],
+): Promise<AutocompleteSuggestion[]> => {
     if (!query.trim()) {
         return [];
     }
-    const response = await api.get<string[]>('/api/search/suggestions', {
-        params: { q: query },
+
+    const params: Record<string, string> = { q: query };
+    const mergedViewedCategories = [...new Set([...(user?.viewedCategories ?? []), ...viewedCategories])]
+        .filter((value) => value && value.trim().length > 0);
+    const topCategories = (user?.topCategories ?? [])
+        .map((item) => item.category)
+        .filter((value) => value && value.trim().length > 0);
+
+    if (user?.inn) {
+        params.inn = user.inn;
+    }
+    if (mergedViewedCategories.length) {
+        params.viewed_categories = mergedViewedCategories.join("|");
+    }
+    if (topCategories.length) {
+        params.top_categories = topCategories.join("|");
+    }
+
+    const response = await api.get<AutocompleteSuggestion[]>('/api/search/suggestions', {
+        params,
     });
     return response.data;
 };

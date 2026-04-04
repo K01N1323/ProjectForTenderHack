@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { User, Product } from '../types';
+import { User, Product, AutocompleteSuggestion, SearchResponse } from '../types';
 import { sendEvent } from '../api';
 
 interface StoreState {
@@ -11,26 +11,34 @@ interface StoreState {
   viewedCategories: string[]; 
   bouncedCategories: string[]; // Penalized categories
   productOpenTimes: Record<string, number>; // productId -> timestamp of opening
-  cartProductIds: string[];
+  cartProducts: Product[];
 
   // Search Context
   searchQuery: string;
   results: Product[];
   isSearching: boolean;
-  suggestions: string[];
+  suggestions: AutocompleteSuggestion[];
   correctedQuery: string | null;
+  totalFound: number;
+  hasMore: boolean;
+  searchOffset: number;
+  searchLimit: number;
+  minScore: number;
 
   setSearchQuery: (query: string) => void;
-  setResults: (results: Product[]) => void;
   setIsSearching: (isSearching: boolean) => void;
-  setSuggestions: (suggestions: string[]) => void;
+  setSuggestions: (suggestions: AutocompleteSuggestion[]) => void;
   setCorrectedQuery: (query: string | null) => void;
+  setSearchResponse: (response: SearchResponse, append?: boolean) => void;
+  resetSearchResults: () => void;
 
   // Actions
   trackProductParams: (category: string) => void;
   simulateProductOpen: (productId: string, category: string) => void;
   simulateProductClose: (productId: string, category: string) => void;
-  addToCart: (productId: string, category: string) => void;
+  addToCart: (product: Product) => void;
+  removeFromCart: (productId: string) => void;
+  clearCart: () => void;
 }
 
 export const useStore = create<StoreState>((set, get) => ({
@@ -41,7 +49,7 @@ export const useStore = create<StoreState>((set, get) => ({
       viewedCategories: user.viewedCategories ?? [],
       bouncedCategories: [],
       productOpenTimes: {},
-      cartProductIds: [],
+      cartProducts: [],
     }),
   logout: () =>
     set({
@@ -49,29 +57,54 @@ export const useStore = create<StoreState>((set, get) => ({
       viewedCategories: [],
       bouncedCategories: [],
       productOpenTimes: {},
-      cartProductIds: [],
+      cartProducts: [],
       results: [],
       searchQuery: '',
       suggestions: [],
       correctedQuery: null,
+      totalFound: 0,
+      hasMore: false,
+      searchOffset: 0,
     }),
 
   viewedCategories: [],
   bouncedCategories: [],
   productOpenTimes: {},
-  cartProductIds: [],
+  cartProducts: [],
 
   searchQuery: '',
   results: [],
   isSearching: false,
   suggestions: [],
   correctedQuery: null,
+  totalFound: 0,
+  hasMore: false,
+  searchOffset: 0,
+  searchLimit: 20,
+  minScore: 0.55,
 
   setSearchQuery: (query) => set({ searchQuery: query }),
-  setResults: (results) => set({ results }),
   setIsSearching: (isSearching) => set({ isSearching }),
   setSuggestions: (suggestions) => set({ suggestions }),
   setCorrectedQuery: (query) => set({ correctedQuery: query }),
+  setSearchResponse: (response, append = false) =>
+    set((state) => {
+      const nextResults = append ? [...state.results, ...response.items] : response.items;
+      const totalFound = response.total_found ?? response.totalCount ?? nextResults.length;
+      return {
+        results: nextResults,
+        totalFound,
+        hasMore: response.has_more,
+        searchOffset: nextResults.length,
+      };
+    }),
+  resetSearchResults: () =>
+    set({
+      results: [],
+      totalFound: 0,
+      hasMore: false,
+      searchOffset: 0,
+    }),
 
   trackProductParams: (category) =>
     set((state) => ({
@@ -105,7 +138,7 @@ export const useStore = create<StoreState>((set, get) => ({
       return {
         productOpenTimes: nextOpenTimes,
         bouncedCategories:
-          timeSpent < 3000
+          timeSpent < 2000
             ? [...new Set([...state.bouncedCategories, category])]
             : state.bouncedCategories,
       };
@@ -122,19 +155,55 @@ export const useStore = create<StoreState>((set, get) => ({
     }).catch((error) => console.error(error));
   },
 
-  addToCart: (productId, category) => {
+  addToCart: (product) => {
     const { user } = get();
     set((state) => ({
-      cartProductIds: [...new Set([...state.cartProductIds, productId])],
-      viewedCategories: [...new Set([...state.viewedCategories, category])],
+      cartProducts: state.cartProducts.some(p => p.id === product.id) 
+        ? state.cartProducts 
+        : [...state.cartProducts, product],
+      viewedCategories: [...new Set([...state.viewedCategories, product.category])],
     }));
     void sendEvent({
       userId: user?.id,
       inn: user?.inn,
       region: user?.region,
       eventType: 'cart_add',
-      steId: productId,
-      category,
+      steId: product.id,
+      category: product.category,
     }).catch((error) => console.error(error));
+  },
+
+  removeFromCart: (productId) => {
+    const { user, cartProducts } = get();
+    const productToRemove = cartProducts.find(p => p.id === productId);
+    set((state) => ({
+      cartProducts: state.cartProducts.filter(p => p.id !== productId),
+    }));
+    if (productToRemove) {
+      void sendEvent({
+        userId: user?.id,
+        inn: user?.inn,
+        region: user?.region,
+        eventType: 'cart_remove',
+        steId: productId,
+        category: productToRemove.category,
+      }).catch((error) => console.error(error));
+    }
+  },
+
+  clearCart: () => {
+    const { user, cartProducts } = get();
+    // Simulate purchase events for all products in cart
+    cartProducts.forEach(product => {
+      void sendEvent({
+        userId: user?.id,
+        inn: user?.inn,
+        region: user?.region,
+        eventType: 'purchase',
+        steId: product.id,
+        category: product.category,
+      }).catch((error) => console.error(error));
+    });
+    set({ cartProducts: [] });
   },
 }));

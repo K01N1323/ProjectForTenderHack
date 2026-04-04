@@ -24,17 +24,7 @@ const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
     };
 
     useEffect(() => {
-        return () => {
-            if (isOpen) {
-                simulateProductClose(product.id, product.category);
-            }
-        };
-    }, [isOpen, product.id, product.category, simulateProductClose]);
-
-    useEffect(() => {
-        if (!isOpen) {
-            return;
-        }
+        if (!isOpen) return;
         const previousOverflow = document.body.style.overflow;
         document.body.style.overflow = 'hidden';
         return () => {
@@ -65,6 +55,10 @@ const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
                             <span className="text-[#3e6ea7]">{product.id}</span>
                         </div>
                         <div>
+                            <span className="font-semibold">Предложений: </span>
+                            <span className="text-[#3e6ea7]">{product.offerCount}</span>
+                        </div>
+                        <div>
                             <span className="font-semibold">Поставщик: </span>
                             <span className="text-[#3e6ea7] break-all">{product.supplierInn || 'не указан'}</span>
                         </div>
@@ -87,21 +81,24 @@ const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
                     </button>
 
                     <div className="mt-auto pt-6">
-                        <div className="border-t border-[#e8eaef] pt-4 flex items-end justify-between gap-4">
-                            <div>
-                                <div className="text-[#1f2937] font-bold text-[18px] md:text-[20px] leading-none">
-                                    {product.price.toLocaleString('ru-RU')} ₽
-                                </div>
-                                <div className="mt-2 text-[#777f8c] text-[15px]">Штука</div>
+                        <div className="border-t border-[#e8eaef] pt-4 flex items-center justify-between gap-3">
+                            <div className="text-[#1f2937] font-bold text-[18px] md:text-[20px] leading-none">
+                                {product.price > 0
+                                    ? `${product.price.toLocaleString('ru-RU')} ₽`
+                                    : <span className="text-[#9ca3af] text-[15px] font-medium">Цена не указана</span>
+                                }
                             </div>
-                            <div className="text-right">
-                                <div className="text-[15px] text-[#9ca3af] italic">
-                                    {product.price.toLocaleString('ru-RU')} ₽
-                                </div>
-                                <div className="mt-2 text-[13px] uppercase tracking-wide text-[#b3b9c3]">
-                                    В каталоге
-                                </div>
-                            </div>
+                            <button
+                                type="button"
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    addToCart(product);
+                                }}
+                                className="flex-shrink-0 p-2 border border-[#d63d2b] text-[#d63d2b] hover:bg-[#fdf2f1] transition-colors rounded-[2px]"
+                                title="Добавить в корзину"
+                            >
+                                <ShoppingCart size={18} />
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -125,6 +122,10 @@ const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
                                 <div>
                                     <span className="font-semibold">ID СТЕ </span>
                                     <span className="text-[#3e6ea7]">{product.id}</span>
+                                </div>
+                                <div>
+                                    <span className="font-semibold">Предложений: </span>
+                                    <span className="text-[#3e6ea7]">{product.offerCount}</span>
                                 </div>
                                 <div>
                                     <span className="font-semibold">Поставщик: </span>
@@ -151,7 +152,7 @@ const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
                                     type="button"
                                     onClick={(e) => {
                                         e.stopPropagation();
-                                        addToCart(product.id, product.category);
+                                        addToCart(product);
                                     }}
                                     className="inline-flex items-center gap-2 bg-[#d63d2b] hover:bg-[#bf3324] text-white px-5 py-3 font-semibold transition-colors"
                                 >

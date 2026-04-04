@@ -75,6 +75,7 @@ class PersonalizationServiceTests(unittest.TestCase):
                     (1, "ИММУНОДЕПРЕССАНТЫ,L04", "иммунодепрессанты l04"),
                     (2, "Ручки канцелярские", "ручки канцелярские"),
                     (3, "Расходные материалы и комплектующие для лазерных принтеров и МФУ", "расходные материалы и комплектующие для лазерных принтеров и мфу"),
+                    (4, "Дезинфицирующие средства медицинские", "дезинфицирующие средства медицинские"),
                 ],
             )
             conn.executemany(
@@ -86,6 +87,12 @@ class PersonalizationServiceTests(unittest.TestCase):
                 [
                     ("cust-1", 1, 100, 100000.0, "2024-01-01", "2025-01-01"),
                     ("cust-1", 2, 10, 1500.0, "2024-02-01", "2025-02-01"),
+                    ("cust-2", 1, 45, 52000.0, "2024-01-01", "2025-01-01"),
+                    ("cust-2", 3, 70, 68000.0, "2024-02-01", "2025-02-15"),
+                    ("cust-3", 1, 35, 41000.0, "2024-01-01", "2025-01-20"),
+                    ("cust-3", 3, 55, 72000.0, "2024-02-15", "2025-02-20"),
+                    ("cust-4", 4, 65, 39000.0, "2024-04-01", "2025-03-10"),
+                    ("cust-sparse", 1, 3, 1800.0, "2024-05-01", "2025-03-05"),
                 ],
             )
             conn.executemany(
@@ -97,6 +104,12 @@ class PersonalizationServiceTests(unittest.TestCase):
                 [
                     ("cust-1", "ste-immune-1", 1, 20, 25000.0, "2024-03-01", "2025-03-01"),
                     ("cust-1", "ste-pen-1", 2, 4, 400.0, "2024-03-01", "2025-03-01"),
+                    ("cust-2", "ste-immune-2", 1, 9, 11000.0, "2024-03-01", "2025-03-01"),
+                    ("cust-2", "ste-printer-1", 3, 18, 28000.0, "2024-03-01", "2025-03-10"),
+                    ("cust-3", "ste-immune-3", 1, 8, 9800.0, "2024-03-01", "2025-03-01"),
+                    ("cust-3", "ste-printer-2", 3, 16, 25000.0, "2024-03-05", "2025-03-12"),
+                    ("cust-4", "ste-disinfect-1", 4, 14, 12000.0, "2024-04-10", "2025-03-12"),
+                    ("cust-sparse", "ste-immune-sparse", 1, 2, 900.0, "2024-06-01", "2025-03-05"),
                 ],
             )
             conn.executemany(
@@ -113,6 +126,15 @@ class PersonalizationServiceTests(unittest.TestCase):
             conn.execute(
                 "INSERT INTO customer_region_lookup (customer_inn, customer_region, frequency) VALUES (?, ?, ?)",
                 ("cust-1", "Москва", 12),
+            )
+            conn.executemany(
+                "INSERT INTO customer_region_lookup (customer_inn, customer_region, frequency) VALUES (?, ?, ?)",
+                [
+                    ("cust-2", "Москва", 8),
+                    ("cust-3", "Москва", 7),
+                    ("cust-4", "Казань", 4),
+                    ("cust-sparse", "Санкт-Петербург", 2),
+                ],
             )
             conn.commit()
         finally:
@@ -131,8 +153,57 @@ class PersonalizationServiceTests(unittest.TestCase):
     def test_build_customer_profile_infers_region_and_preferences(self) -> None:
         profile = self.service.build_customer_profile("cust-1")
         self.assertEqual(profile["customer_region"], "Москва")
+        self.assertEqual(profile["institution_archetype"], "healthcare")
         self.assertEqual(profile["top_categories"][0]["category"], "ИММУНОДЕПРЕССАНТЫ,L04")
         self.assertEqual(profile["top_ste"][0]["ste_id"], "ste-immune-1")
+
+    def test_build_customer_profile_generates_peer_and_type_backfill_recommendations(self) -> None:
+        profile = self.service.build_customer_profile("cust-1")
+        recommended_categories = profile["recommended_categories"]
+        recommended_ste = profile["recommended_ste"]
+
+        self.assertEqual(recommended_categories[0]["category"], "ИММУНОДЕПРЕССАНТЫ,L04")
+        self.assertTrue(all(float(item.get("region_weight", 0.0) or 0.0) == 0.0 for item in recommended_categories))
+        self.assertTrue(all(float(item.get("region_weight", 0.0) or 0.0) == 0.0 for item in recommended_ste))
+        self.assertTrue(
+            any(
+                item["category"] == "Расходные материалы и комплектующие для лазерных принтеров и МФУ"
+                and "медицин" in str(item.get("reason", "")).lower()
+                for item in recommended_categories
+            )
+        )
+        self.assertEqual(recommended_ste[0]["ste_id"], "ste-immune-1")
+        self.assertTrue(
+            any(
+                item["ste_id"] == "ste-printer-1"
+                and "медицин" in str(item.get("reason", "")).lower()
+                for item in recommended_ste
+            )
+        )
+
+    def test_build_customer_profile_adds_archetype_based_recommendations_for_sparse_history(self) -> None:
+        profile = self.service.build_customer_profile("cust-sparse")
+        recommended_categories = profile["recommended_categories"]
+        recommended_ste = profile["recommended_ste"]
+
+        self.assertEqual(profile["institution_archetype"], "healthcare")
+        self.assertTrue(profile["archetype_categories"])
+        self.assertTrue(profile["archetype_ste"])
+        self.assertIn("cust-4", profile["same_type_peer_inns"])
+        self.assertTrue(
+            any(
+                item["category"] == "Дезинфицирующие средства медицинские"
+                and "того же типа" in str(item.get("reason", "")).lower()
+                for item in recommended_categories
+            )
+        )
+        self.assertTrue(
+            any(
+                item["ste_id"] == "ste-disinfect-1"
+                and "того же типа" in str(item.get("reason", "")).lower()
+                for item in recommended_ste
+            )
+        )
 
     def test_rerank_ste_boosts_matching_history_and_category(self) -> None:
         profile = self.service.build_customer_profile("cust-1")
@@ -159,7 +230,7 @@ class PersonalizationServiceTests(unittest.TestCase):
         self.assertIn("часто закупалось этой организацией", reranked[0]["explanation"])
         self.assertGreater(reranked[0]["final_score"], reranked[1]["final_score"])
 
-    def test_rerank_offers_prefers_matching_offer_with_region_and_session(self) -> None:
+    def test_rerank_offers_prefers_matching_offer_with_history_and_session(self) -> None:
         profile = self.service.build_customer_profile("cust-1")
         offers = [
             {
@@ -185,7 +256,9 @@ class PersonalizationServiceTests(unittest.TestCase):
             session_state={"clicked_ste_ids": [], "cart_ste_ids": ["ste-immune-1"], "recent_categories": ["иммунодепрессанты l04"]},
         )
         self.assertEqual(reranked[0]["offer_id"], "offer-1")
-        self.assertIn("регион поставки совпадает с регионом заказчика", reranked[0]["offer_explanation"])
+        self.assertIn("СТЕ уже часто закупалось этой организацией", reranked[0]["offer_explanation"])
+        self.assertEqual(reranked[0]["offer_personalization_features"]["region_match_boost"], 0.0)
+        self.assertEqual(reranked[0]["offer_personalization_features"]["region_affinity"], 0.0)
         self.assertGreater(reranked[0]["final_offer_score"], reranked[1]["final_offer_score"])
 
 

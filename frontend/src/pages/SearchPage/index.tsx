@@ -1,14 +1,58 @@
-import React from 'react';
+import React, { useState } from 'react';
 import SearchBar from '../../components/SearchBar/SearchBar';
 import ProductCard from '../../components/ProductCard';
 import { useStore } from '../../store/store';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Search } from 'lucide-react';
+import { searchProducts } from '../../api';
 
 const SearchPage = () => {
-    const { results, isSearching, searchQuery, correctedQuery } = useStore();
+    const {
+        results,
+        isSearching,
+        searchQuery,
+        correctedQuery,
+        totalFound,
+        hasMore,
+        searchOffset,
+        searchLimit,
+        minScore,
+        user,
+        viewedCategories,
+        bouncedCategories,
+        setSearchResponse,
+    } = useStore();
+    const [isLoadingMore, setIsLoadingMore] = useState(false);
 
     const hasNoResults = results.length === 0 && searchQuery.length > 0 && !isSearching;
     const isPristine = results.length === 0 && searchQuery.length === 0 && !isSearching && !correctedQuery;
+    const shouldShowSummary = Boolean(searchQuery.trim()) && !isPristine && !isSearching;
+    const showInitialLoader = isSearching && results.length === 0;
+
+    const handleLoadMore = async () => {
+        if (!searchQuery.trim() || !hasMore || isLoadingMore) {
+            return;
+        }
+
+        setIsLoadingMore(true);
+        try {
+            const response = await searchProducts(
+                searchQuery,
+                user,
+                viewedCategories,
+                bouncedCategories,
+                {
+                    limit: searchLimit,
+                    offset: searchOffset,
+                    minScore,
+                },
+            );
+            setSearchResponse(response, true);
+        } catch (error) {
+            console.error(error);
+        } finally {
+            setIsLoadingMore(false);
+        }
+    };
 
     return (
         <div className="w-full max-w-[1600px] mx-auto px-8 lg:px-12 pb-20">
@@ -19,10 +63,10 @@ const SearchPage = () => {
             </div>
 
             <div className="w-full relative z-10 mt-10">
-                {isSearching && (
+                {showInitialLoader && (
                     <div className="flex flex-col items-center justify-center py-32 text-gray-500">
-                        <Loader2 className="animate-spin mb-6 text-[#E03F3F]" size={48} />
-                        <p className="text-lg font-medium">Интеллектуальный поиск по каталогу...</p>
+                        <Loader2 className="animate-spin mb-6 text-[#da291c]" size={48} />
+                        <p className="text-lg font-medium">Поиск по каталогу...</p>
                     </div>
                 )}
 
@@ -37,18 +81,47 @@ const SearchPage = () => {
                     </div>
                 )}
 
+                {shouldShowSummary && (
+                    <div className="mb-6 rounded-2xl border border-[#e6e8ec] bg-white px-5 py-4 text-[17px] font-medium text-[#49515e] shadow-sm">
+                        Найдено предложений: {totalFound}
+                    </div>
+                )}
+
                 {!isSearching && hasNoResults && (
-                    <div className="text-center py-24 text-gray-600 bg-white border border-[#e6e8ec] shadow-sm">
-                        <p className="text-2xl font-bold mb-3 text-gray-900">Ничего не найдено</p>
-                        <p className="text-lg text-gray-500">Убедитесь, что запрос написан без ошибок, или попробуйте использовать другие синонимы.</p>
+                    <div className="rounded-[28px] border border-[#e6e8ec] bg-[linear-gradient(135deg,#ffffff_0%,#f8fafc_100%)] px-8 py-20 text-center text-gray-600 shadow-sm">
+                        <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-[#f3f5f8] text-[#E03F3F]">
+                            <Search size={34} strokeWidth={2.2} />
+                        </div>
+                        <p className="mt-6 text-[28px] font-semibold text-[#1f2937]">
+                            По вашему запросу ничего не найдено
+                        </p>
+                        <p className="mx-auto mt-3 max-w-2xl text-[18px] leading-8 text-[#7b8494]">
+                            Попробуйте изменить формулировку
+                        </p>
                     </div>
                 )}
 
                 {!isSearching && results.length > 0 && (
-                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-6">
-                        {results.map((product) => (
-                            <ProductCard key={product.id} product={product} />
-                        ))}
+                    <div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-6">
+                            {results.map((product) => (
+                                <ProductCard key={product.id} product={product} />
+                            ))}
+                        </div>
+
+                        {hasMore && (
+                            <div className="mt-10 flex justify-center">
+                                <button
+                                    type="button"
+                                    onClick={() => void handleLoadMore()}
+                                    disabled={isLoadingMore}
+                                    className="inline-flex min-w-[220px] items-center justify-center gap-3 rounded-full border border-[#d9dee5] bg-white px-8 py-4 text-[17px] font-medium text-[#303846] shadow-sm transition-colors hover:border-[#c7ced8] hover:bg-[#f7f9fb] disabled:cursor-not-allowed disabled:opacity-70"
+                                >
+                                    {isLoadingMore && <Loader2 className="animate-spin" size={18} />}
+                                    {isLoadingMore ? 'Загружаем еще...' : 'Показать еще'}
+                                </button>
+                            </div>
+                        )}
                     </div>
                 )}
             </div>

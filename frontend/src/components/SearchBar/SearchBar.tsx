@@ -2,12 +2,19 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Search } from 'lucide-react';
 import { useStore } from '../../store/store';
 import { searchProducts, getSuggestions } from '../../api';
+import type { AutocompleteSuggestion } from '../../types';
+
+const SUGGESTION_TYPE_LABEL: Record<AutocompleteSuggestion['type'], string> = {
+    product: 'Товар',
+    category: 'Категория',
+    correction: 'Исправление',
+    query: 'Запрос',
+};
 
 const SearchBar = () => {
     const { 
         searchQuery, 
         setSearchQuery, 
-        setResults, 
         setIsSearching, 
         suggestions, 
         setSuggestions,
@@ -15,7 +22,11 @@ const SearchBar = () => {
         setCorrectedQuery,
         user,
         viewedCategories,
-        bouncedCategories
+        bouncedCategories,
+        searchLimit,
+        minScore,
+        setSearchResponse,
+        resetSearchResults,
     } = useStore();
     
     const [localQuery, setLocalQuery] = useState(searchQuery);
@@ -35,7 +46,7 @@ const SearchBar = () => {
         }
 
         try {
-            const suggs = await getSuggestions(trimmedQuery);
+            const suggs = await getSuggestions(trimmedQuery, user, viewedCategories);
             if (suggestionRequestRef.current === requestId) {
                 setSuggestions(suggs);
             }
@@ -49,19 +60,34 @@ const SearchBar = () => {
 
     // Executing full search
     const performSearch = async (queryToSearch: string) => {
+        const trimmedQuery = queryToSearch.trim();
+        if (!trimmedQuery) {
+            resetSearchResults();
+            setSearchQuery('');
+            setCorrectedQuery(null);
+            setSuggestions([]);
+            setIsFocused(false);
+            return;
+        }
         setIsSearching(true);
-        setSearchQuery(queryToSearch);
+        resetSearchResults();
+        setSearchQuery(trimmedQuery);
         setIsFocused(false); // Close suggestions on full search
         suggestionRequestRef.current += 1;
         setSuggestions([]);
         try {
             const response = await searchProducts(
-                queryToSearch, 
+                trimmedQuery, 
                 user,
                 viewedCategories, 
                 bouncedCategories, 
+                {
+                    limit: searchLimit,
+                    offset: 0,
+                    minScore: minScore,
+                },
             );
-            setResults(response.items);
+            setSearchResponse(response);
             setCorrectedQuery(response.correctedQuery || null);
         } catch (error) {
             console.error(error);
@@ -86,16 +112,16 @@ const SearchBar = () => {
         return () => {
             if (timerRef.current) clearTimeout(timerRef.current);
         };
-    }, [localQuery, setSuggestions]);
+    }, [localQuery, setSuggestions, user, viewedCategories]);
 
     const handleSearchSubmit = (e?: React.FormEvent) => {
         if (e) e.preventDefault();
         performSearch(localQuery);
     };
 
-    const handleSuggestionClick = (suggestion: string) => {
-        setLocalQuery(suggestion);
-        performSearch(suggestion);
+    const handleSuggestionClick = (suggestion: AutocompleteSuggestion) => {
+        setLocalQuery(suggestion.text);
+        performSearch(suggestion.text);
     };
 
     const handleCorrectedQueryClick = () => {
@@ -151,15 +177,29 @@ const SearchBar = () => {
                 <div className="absolute top-[76px] left-0 w-full bg-white shadow-lg border border-[#e6e8ec] mt-2 z-20 overflow-hidden py-2 hidden md:block">
                     {suggestions.map((suggestion, idx) => (
                         <div 
-                            key={idx}
+                            key={`${suggestion.type}-${suggestion.text}-${idx}`}
                             onMouseDown={(e) => {
                                 e.preventDefault();
                                 handleSuggestionClick(suggestion);
                             }}
-                            className="px-6 py-3 cursor-pointer hover:bg-[#f4f6f8] flex items-center gap-3 text-[18px] text-gray-800 transition-colors"
+                            className="px-6 py-3 cursor-pointer hover:bg-[#f4f6f8] flex items-start gap-3 text-[18px] text-gray-800 transition-colors"
                         >
-                            <Search size={18} className="text-gray-400" />
-                            {suggestion}
+                            <Search size={18} className="text-gray-400 mt-1 flex-shrink-0" />
+                            <div className="min-w-0 flex-1">
+                                <div className="text-[18px] leading-6 text-gray-900">{suggestion.text}</div>
+                                {(suggestion.reason || suggestion.type) && (
+                                    <div className="mt-1 flex items-center gap-2 text-[12px] uppercase tracking-[0.08em] text-[#8a919e]">
+                                        <span className="inline-flex rounded-full bg-[#eef1f5] px-2 py-0.5 text-[11px] font-medium text-[#5f6775]">
+                                            {SUGGESTION_TYPE_LABEL[suggestion.type]}
+                                        </span>
+                                        {suggestion.reason && (
+                                            <span className="truncate normal-case tracking-normal text-[13px]">
+                                                {suggestion.reason}
+                                            </span>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
                         </div>
                     ))}
                 </div>
