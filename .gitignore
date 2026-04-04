@@ -15,3 +15,5 @@ __pycache__/
 # Generated data artifacts
 data/processed/
 reports/
+
+venv/

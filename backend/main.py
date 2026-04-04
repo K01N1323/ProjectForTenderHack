@@ -28,7 +28,32 @@ from tenderhack.penalization import InMemorySkipStorage, InteractionTracker, Ran
 from tenderhack.personalization import PersonalizationService
 from tenderhack.personalization_runtime import PersonalizationRuntimeService
 from tenderhack.search import SearchService
+from tenderhack.search_rerank_model import SearchRerankPredictor
 from tenderhack.text import normalize_text, stem_token, tokenize, unique_preserve_order
+from tenderhack.penalization import InMemorySkipStorage, InteractionTracker, RankingModifier
+from tenderhack.cart_boost import CartBoostModifier, InMemoryCartStorage
+
+
+def _discover_search_rerank_model_path(project_root: Path) -> Path:
+    candidates = [
+        project_root / "data" / "processed" / "tenderhack_yeti_ranker.cbm",
+        project_root / "data" / "processed" / "tenderhack_yeti_ranker_small.cbm",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+def _discover_search_rerank_metadata_path(project_root: Path) -> Path:
+    candidates = [
+        project_root / "data" / "processed" / "tenderhack_yeti_ranker.json",
+        project_root / "data" / "processed" / "tenderhack_yeti_ranker_small.json",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
 
 
 @dataclass
@@ -201,6 +226,8 @@ class TenderHackApiService:
         self.skip_storage = InMemorySkipStorage()
         self.interaction_tracker = InteractionTracker(self.skip_storage)
         self.ranking_modifier = RankingModifier(self.skip_storage)
+        self.cart_storage = InMemoryCartStorage()
+        self.cart_boost_modifier = CartBoostModifier(self.cart_storage)
 
     def close(self) -> None:
         self.search_service.close()
@@ -375,6 +402,18 @@ class TenderHackApiService:
                 item["top_reason_codes"] = []
                 item["reasons"] = ["оставлено выше за счёт базовой текстовой релевантности"]
 
+        # Шаг 1: мягкий буст за категории из корзины
+        results = self.cart_boost_modifier.apply_boost(
+            recommendations=results,
+            user_id=user_context.id or (f"user-{user_context.inn}" if user_context.inn else "anonymous"),
+        )
+
+        # Шаг 2: эвристическая пессимизация (штраф за быстрый отказ)
+        results = self.ranking_modifier.apply_penalties(
+            recommendations=results, 
+            user_id=user_context.id or (f"user-{user_context.inn}" if user_context.inn else "anonymous")
+        )
+
         if same_type_prefix_products:
             self._apply_same_type_prefix_boost(results, same_type_prefix_products)
 
@@ -383,11 +422,6 @@ class TenderHackApiService:
             if category_norm and category_norm in bounced_categories:
                 item["final_score"] = round(float(item.get("final_score", item.get("search_score", 0.0))) - 100.0, 4)
                 item["reason_to_hide"] = "Категория пессимизирована после быстрого отказа"
-
-        results = self.ranking_modifier.apply_penalties(
-            recommendations=results,
-            user_id=resolved_user_id,
-        )
 
         results.sort(
             key=lambda item: (
@@ -465,6 +499,12 @@ class TenderHackApiService:
                 category_id=str(payload.category),
                 dwell_time_ms=payload.durationMs or 0,
             )
+
+        # Трекинг корзины: обновляем счётчик добавлений/удалений по категории
+        if payload.eventType == "cart_add" and payload.category:
+            self.cart_storage.increment_cart(resolved_user_id, str(payload.category))
+        elif payload.eventType == "cart_remove" and payload.category:
+            self.cart_storage.decrement_cart(resolved_user_id, str(payload.category))
         session_state = self.online_state_service.record_event(
             user_id=resolved_user_id,
             customer_inn=payload.inn,

@@ -1,13 +1,22 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List
 
 from .semantic import DEFAULT_FASTTEXT_MODEL_PATH, SemanticExpander
-from .text import normalize_text, normalize_tokens, stem_token, stem_tokens, tokenize, unique_preserve_order
+from .text import (
+    extract_attribute_spans,
+    normalize_text,
+    normalize_tokens,
+    stem_token,
+    stem_tokens,
+    tokenize,
+    unique_preserve_order,
+)
 
 
 DEFAULT_SEARCH_DB = Path("data/processed/tenderhack_search.sqlite")
@@ -63,6 +72,8 @@ class QueryAnalysis:
     applied_completions: List[Dict[str, List[str]]]
     applied_synonyms: List[Dict[str, List[str]]]
     applied_semantic_neighbors: List[Dict[str, object]]
+    # Structured attribute pairs extracted from the query, e.g. [("500", "мг"), ("16", "гб")]
+    attribute_spans: List[tuple]
 
 
 class TypoCorrector:
@@ -295,6 +306,8 @@ class SearchService:
         merged_tokens = unique_preserve_order(corrected_tokens + synonym_expansions + completion_expansions + semantic_expansions)
         stemmed_tokens = stem_tokens(corrected_tokens)
         expanded_stems = stem_tokens(merged_tokens)
+        # Extract structured attribute spans (value+unit pairs) from the original query
+        attribute_spans = extract_attribute_spans(query)
         return QueryAnalysis(
             original_query=query,
             normalized_query=normalized_query,
@@ -310,6 +323,7 @@ class SearchService:
             applied_completions=applied_completions,
             applied_synonyms=applied_synonyms,
             applied_semantic_neighbors=applied_semantic_neighbors,
+            attribute_spans=attribute_spans,
         )
 
     def _build_match_query(self, analysis: QueryAnalysis) -> str:
@@ -358,6 +372,55 @@ class SearchService:
             return True
         return any(len(token) <= 4 and not token.isdigit() for token in analysis.corrected_tokens)
 
+    @staticmethod
+    def _compute_attribute_score(row: sqlite3.Row, analysis: QueryAnalysis) -> float:
+        """Score bonus/penalty based on structured attribute matching.
+
+        Strategy:
+        - For each (value, unit) pair from the query:
+            - Check the candidate's normalized_name + attribute_keys for the
+              pair and for *any* other value with the same unit.
+            - +5.0 exact value+unit match in name/keys
+            - +2.0 value appears anywhere in name (unit match not needed)
+            - -3.0 same unit present but a *different* numeric value is adjacent
+              (e.g. query asks 500мг but candidate says 250мг)
+        - Cap total penalty to avoid burying otherwise-good candidates.
+        """
+        if not analysis.attribute_spans:
+            return 0.0
+
+        candidate_text = " ".join(filter(None, [
+            row["normalized_name"] or "",
+            row["attribute_keys"] or "",
+        ])).lower()
+
+        total = 0.0
+        for value, unit in analysis.attribute_spans:
+            # Build pattern to find unit with its adjacent number in the candidate
+            unit_re = re.compile(
+                r"(\d+(?:[.,]\d+)?)\s*" + re.escape(unit) + r"\b",
+                re.IGNORECASE,
+            )
+            matches_in_candidate = unit_re.findall(candidate_text)
+
+            if matches_in_candidate:
+                # Normalise candidate values (replace comma decimal separator)
+                candidate_values = [v.replace(",", ".") for v in matches_in_candidate]
+                if value in candidate_values:
+                    # Exact match — strong boost
+                    total += 5.0
+                else:
+                    # Same unit, different value — penalise
+                    total -= 3.0
+            else:
+                # Unit not found in candidate — check whether the bare value is
+                # present (could be written differently)
+                if re.search(r"\b" + re.escape(value) + r"\b", candidate_text):
+                    total += 2.0
+
+        # Never let attribute penalty alone push score to extremely negative
+        return max(total, -6.0)
+
     def _score_candidate(self, row: sqlite3.Row, analysis: QueryAnalysis) -> tuple[float, Dict[str, float]]:
         name_tokens = set(tokenize(row["normalized_name"]))
         category_tokens = set(tokenize(row["normalized_category"]))
@@ -389,6 +452,7 @@ class SearchService:
             semantic_query,
             f"{row['normalized_name']} {row['normalized_category']} {row['key_tokens']}",
         )
+        attribute_score = self._compute_attribute_score(row, analysis)
 
         coverage_denominator = max(1, len(corrected_set))
         stem_denominator = max(1, len(stem_set))
@@ -412,6 +476,7 @@ class SearchService:
         score += 1.5 * synonym_bonus
         score += 3.0 * semantic_vector_similarity
         score += 2.0 * bm25_component
+        score += attribute_score  # structured attribute bonus/penalty
 
         features = {
             "exact_phrase": round(exact_phrase, 4),
@@ -427,6 +492,7 @@ class SearchService:
             "semantic_vector_similarity": round(semantic_vector_similarity, 4),
             "synonym_bonus": round(synonym_bonus, 4),
             "bm25_component": round(bm25_component, 4),
+            "attribute_score": round(attribute_score, 4),
         }
         return score, features
 

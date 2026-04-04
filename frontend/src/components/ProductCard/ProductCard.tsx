@@ -91,29 +91,24 @@ const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
                     </button>
 
                     <div className="mt-auto pt-6">
-                        <div className="border-t border-[#e8eaef] pt-4 flex items-end justify-between gap-4">
-                            <div>
-                                <div className="text-[#1f2937] font-bold text-[18px] md:text-[20px] leading-none">
-                                    {product.price.toLocaleString('ru-RU')} ₽
-                                </div>
-                                <div className="mt-2 text-[#777f8c] text-[15px]">Штука</div>
+                        <div className="border-t border-[#e8eaef] pt-4 flex items-center justify-between gap-3">
+                            <div className="text-[#1f2937] font-bold text-[18px] md:text-[20px] leading-none">
+                                {product.price > 0
+                                    ? `${product.price.toLocaleString('ru-RU')} ₽`
+                                    : <span className="text-[#9ca3af] text-[15px] font-medium">Цена не указана</span>
+                                }
                             </div>
-                            <div className="flex flex-col items-end gap-2 text-right">
-                                <div className="text-[15px] text-[#9ca3af] italic">
-                                    {product.price.toLocaleString('ru-RU')} ₽
-                                </div>
-                                <button
-                                    type="button"
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        addToCart(product);
-                                    }}
-                                    className="inline-flex items-center justify-center rounded border border-[#da291c] p-2 text-[#da291c] transition-colors hover:bg-red-50"
-                                    title="Добавить в корзину"
-                                >
-                                    <ShoppingCart size={18} />
-                                </button>
-                            </div>
+                            <button
+                                type="button"
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    addToCart(product);
+                                }}
+                                className="flex-shrink-0 p-2 border border-[#d63d2b] text-[#d63d2b] hover:bg-[#fdf2f1] transition-colors rounded-[2px]"
+                                title="Добавить в корзину"
+                            >
+                                <ShoppingCart size={18} />
+                            </button>
                         </div>
                     </div>
                 </div>
