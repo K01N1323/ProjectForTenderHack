@@ -94,8 +94,20 @@ const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
                             </div>
                             <div className="text-sm text-gray-500">Штука</div>
                         </div>
-                        <div className="text-sm text-gray-500 italic">
-                            {product.price > 0 ? `${product.price.toLocaleString('ru-RU')} ₽` : 'Нет предложений'}
+                        <div className="flex flex-col items-end gap-2">
+                            <div className="text-sm text-gray-500 italic">
+                                {product.price > 0 ? `${product.price.toLocaleString('ru-RU')} ₽` : 'Нет предложений'}
+                            </div>
+                            <button
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    addToCart(product);
+                                }}
+                                className="p-2 border border-[#da291c] text-[#da291c] hover:bg-red-50 transition-colors rounded"
+                                title="Добавить в корзину"
+                            >
+                                <ShoppingCart size={18} />
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -140,9 +152,9 @@ const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
                                 type="button"
                                 onClick={(e) => {
                                     e.stopPropagation();
-                                    addToCart(product.id, product.category);
+                                    addToCart(product);
                                 }}
-                                className="inline-flex items-center gap-2 bg-[#d63d2b] hover:bg-[#bf3324] text-white px-5 py-3 font-semibold transition-colors"
+                                className="inline-flex items-center gap-2 bg-[#da291c] hover:bg-[#bf2418] text-white px-5 py-3 font-semibold transition-colors"
                             >
                                 <ShoppingCart size={18} />
                                 Добавить в корзину
