@@ -24,11 +24,18 @@ export interface SearchEventPayload {
     durationMs?: number;
 }
 
+export interface SearchProductsOptions {
+    limit?: number;
+    offset?: number;
+    minScore?: number;
+}
+
 export const searchProducts = async (
     query: string,
     user: User | null,
     viewedCategories: string[],
     bouncedCategories: string[],
+    options: SearchProductsOptions = {},
 ): Promise<SearchResponse> => {
     const response = await api.post<SearchResponse>('/api/search', {
         query,
@@ -42,6 +49,9 @@ export const searchProducts = async (
             : null,
         viewedCategories,
         bouncedCategories,
+        limit: options.limit,
+        offset: options.offset ?? 0,
+        min_score: options.minScore ?? 0.55,
     });
     return response.data;
 };

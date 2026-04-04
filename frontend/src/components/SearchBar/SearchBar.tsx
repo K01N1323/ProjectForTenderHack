@@ -15,7 +15,6 @@ const SearchBar = () => {
     const { 
         searchQuery, 
         setSearchQuery, 
-        setResults, 
         setIsSearching, 
         suggestions, 
         setSuggestions,
@@ -23,7 +22,11 @@ const SearchBar = () => {
         setCorrectedQuery,
         user,
         viewedCategories,
-        bouncedCategories
+        bouncedCategories,
+        searchLimit,
+        minScore,
+        setSearchResponse,
+        resetSearchResults,
     } = useStore();
     
     const [localQuery, setLocalQuery] = useState(searchQuery);
@@ -57,19 +60,34 @@ const SearchBar = () => {
 
     // Executing full search
     const performSearch = async (queryToSearch: string) => {
+        const trimmedQuery = queryToSearch.trim();
+        if (!trimmedQuery) {
+            resetSearchResults();
+            setSearchQuery('');
+            setCorrectedQuery(null);
+            setSuggestions([]);
+            setIsFocused(false);
+            return;
+        }
         setIsSearching(true);
-        setSearchQuery(queryToSearch);
+        resetSearchResults();
+        setSearchQuery(trimmedQuery);
         setIsFocused(false); // Close suggestions on full search
         suggestionRequestRef.current += 1;
         setSuggestions([]);
         try {
             const response = await searchProducts(
-                queryToSearch, 
+                trimmedQuery, 
                 user,
                 viewedCategories, 
                 bouncedCategories, 
+                {
+                    limit: searchLimit,
+                    offset: 0,
+                    minScore: minScore,
+                },
             );
-            setResults(response.items);
+            setSearchResponse(response);
             setCorrectedQuery(response.correctedQuery || null);
         } catch (error) {
             console.error(error);

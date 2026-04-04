@@ -75,6 +75,7 @@ class PersonalizationServiceTests(unittest.TestCase):
                     (1, "ИММУНОДЕПРЕССАНТЫ,L04", "иммунодепрессанты l04"),
                     (2, "Ручки канцелярские", "ручки канцелярские"),
                     (3, "Расходные материалы и комплектующие для лазерных принтеров и МФУ", "расходные материалы и комплектующие для лазерных принтеров и мфу"),
+                    (4, "Дезинфицирующие средства медицинские", "дезинфицирующие средства медицинские"),
                 ],
             )
             conn.executemany(
@@ -90,6 +91,8 @@ class PersonalizationServiceTests(unittest.TestCase):
                     ("cust-2", 3, 70, 68000.0, "2024-02-01", "2025-02-15"),
                     ("cust-3", 1, 35, 41000.0, "2024-01-01", "2025-01-20"),
                     ("cust-3", 3, 55, 72000.0, "2024-02-15", "2025-02-20"),
+                    ("cust-4", 4, 65, 39000.0, "2024-04-01", "2025-03-10"),
+                    ("cust-sparse", 1, 3, 1800.0, "2024-05-01", "2025-03-05"),
                 ],
             )
             conn.executemany(
@@ -105,6 +108,8 @@ class PersonalizationServiceTests(unittest.TestCase):
                     ("cust-2", "ste-printer-1", 3, 18, 28000.0, "2024-03-01", "2025-03-10"),
                     ("cust-3", "ste-immune-3", 1, 8, 9800.0, "2024-03-01", "2025-03-01"),
                     ("cust-3", "ste-printer-2", 3, 16, 25000.0, "2024-03-05", "2025-03-12"),
+                    ("cust-4", "ste-disinfect-1", 4, 14, 12000.0, "2024-04-10", "2025-03-12"),
+                    ("cust-sparse", "ste-immune-sparse", 1, 2, 900.0, "2024-06-01", "2025-03-05"),
                 ],
             )
             conn.executemany(
@@ -127,6 +132,8 @@ class PersonalizationServiceTests(unittest.TestCase):
                 [
                     ("cust-2", "Москва", 8),
                     ("cust-3", "Москва", 7),
+                    ("cust-4", "Казань", 4),
+                    ("cust-sparse", "Санкт-Петербург", 2),
                 ],
             )
             conn.commit()
@@ -168,6 +175,30 @@ class PersonalizationServiceTests(unittest.TestCase):
             any(
                 item["ste_id"] == "ste-printer-1"
                 and "медицин" in str(item.get("reason", "")).lower()
+                for item in recommended_ste
+            )
+        )
+
+    def test_build_customer_profile_adds_archetype_based_recommendations_for_sparse_history(self) -> None:
+        profile = self.service.build_customer_profile("cust-sparse")
+        recommended_categories = profile["recommended_categories"]
+        recommended_ste = profile["recommended_ste"]
+
+        self.assertEqual(profile["institution_archetype"], "healthcare")
+        self.assertTrue(profile["archetype_categories"])
+        self.assertTrue(profile["archetype_ste"])
+        self.assertIn("cust-4", profile["same_type_peer_inns"])
+        self.assertTrue(
+            any(
+                item["category"] == "Дезинфицирующие средства медицинские"
+                and "того же типа" in str(item.get("reason", "")).lower()
+                for item in recommended_categories
+            )
+        )
+        self.assertTrue(
+            any(
+                item["ste_id"] == "ste-disinfect-1"
+                and "того же типа" in str(item.get("reason", "")).lower()
                 for item in recommended_ste
             )
         )

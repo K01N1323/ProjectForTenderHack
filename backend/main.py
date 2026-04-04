@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import math
 import os
+import re
 import sys
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -134,6 +136,9 @@ class SearchRequest(BaseModel):
     viewedCategories: List[str] = Field(default_factory=list)
     bouncedCategories: List[str] = Field(default_factory=list)
     topK: int = Field(default=20, ge=1, le=50)
+    limit: Optional[int] = Field(default=None, ge=1, le=50)
+    offset: int = Field(default=0, ge=0)
+    min_score: float = Field(default=0.55, ge=0.0, le=1.0)
 
 
 class ProductPayload(BaseModel):
@@ -149,6 +154,8 @@ class ProductPayload(BaseModel):
 class SearchResponsePayload(BaseModel):
     items: List[ProductPayload]
     totalCount: int
+    total_found: int
+    has_more: bool
     correctedQuery: Optional[str] = None
 
 
@@ -189,8 +196,9 @@ class EventResponsePayload(BaseModel):
 
 
 class TenderHackApiService:
-    LOGIN_CACHE_VERSION = 4
-    SUGGESTIONS_CACHE_VERSION = 5
+    LOGIN_CACHE_VERSION = 5
+    SEARCH_CACHE_VERSION = 6
+    SUGGESTIONS_CACHE_VERSION = 11
 
     def __init__(self, settings: AppSettings) -> None:
         self.settings = settings
@@ -319,7 +327,14 @@ class TenderHackApiService:
         return result
 
     def search(self, payload: SearchRequest) -> SearchResponsePayload:
+        page_limit = int(payload.limit or payload.topK)
         user_context = payload.userContext or SearchUserContext()
+        normalized_query = normalize_text(payload.query)
+        short_personalized_prefix = bool(
+            user_context.inn
+            and len(tokenize(normalized_query)) == 1
+            and 2 <= len(normalized_query) <= 4
+        )
         server_session = self.online_state_service.get_session_state(
             user_id=user_context.id or (f"user-{user_context.inn}" if user_context.inn else None),
             customer_inn=user_context.inn,
@@ -349,7 +364,21 @@ class TenderHackApiService:
         if isinstance(cached_payload, dict):
             return SearchResponsePayload(**cached_payload)
 
-        raw_payload = self.search_service.search(query=payload.query, top_k=max(payload.topK * 5, 60))
+        same_type_prefix_products = (
+            self._resolve_same_type_prefix_products(user_inn=user_context.inn, query=payload.query)
+            if short_personalized_prefix
+            else []
+        )
+        raw_limit = max((payload.offset + page_limit) * 5, 60)
+        if short_personalized_prefix:
+            raw_limit = max(raw_limit, 160)
+        raw_payload = self.search_service.search(
+            query=payload.query,
+            limit=raw_limit,
+            offset=0,
+            min_score=payload.min_score,
+            candidate_limit=max(raw_limit * 4, 250),
+        )
         results = list(raw_payload["results"])
         if self.search_rerank_predictor.enabled:
             results = self.search_rerank_predictor.rerank_candidates(
@@ -381,6 +410,9 @@ class TenderHackApiService:
                 item["top_reason_codes"] = []
                 item["reasons"] = ["оставлено выше за счёт базовой текстовой релевантности"]
 
+        if same_type_prefix_products:
+            self._apply_same_type_prefix_boost(results, same_type_prefix_products)
+
         for item in results:
             category_norm = normalize_text(str(item.get("category", "")))
             if category_norm and category_norm in bounced_categories:
@@ -390,15 +422,18 @@ class TenderHackApiService:
         results.sort(
             key=lambda item: (
                 float(item.get("session_priority", 0.0)),
-                float(item.get("history_priority", 0.0)),
                 float(item.get("final_score", item.get("search_score", 0.0))),
-                float(item.get("personalization_score", 0.0)),
                 float(item.get("search_score", 0.0)),
+                float(item.get("history_priority", 0.0)),
+                float(item.get("personalization_score", 0.0)),
             ),
             reverse=True,
         )
 
-        ste_ids = [str(item["ste_id"]) for item in results[: payload.topK * 2]]
+        total_found = int(raw_payload.get("total_found", len(results)))
+        paginated_results = results[payload.offset : payload.offset + page_limit]
+
+        ste_ids = [str(item["ste_id"]) for item in paginated_results]
         offer_lookup = self.offer_lookup_service.get_offer_lookup(ste_ids)
         description_lookup = self.description_service.get_previews(
             ste_ids,
@@ -406,14 +441,12 @@ class TenderHackApiService:
                 str(item["ste_id"]): {
                     "attribute_keys": str(item.get("attribute_keys") or ""),
                 }
-                for item in results[: payload.topK * 2]
+                for item in paginated_results
             },
         )
 
         products: List[ProductPayload] = []
-        for item in results:
-            if len(products) >= payload.topK:
-                break
+        for item in paginated_results:
             ste_id = str(item["ste_id"])
             offer = offer_lookup.get(ste_id, {})
             reason_to_show = self._map_reason_to_show(
@@ -441,7 +474,9 @@ class TenderHackApiService:
 
         response_payload = SearchResponsePayload(
             items=products,
-            totalCount=len(results),
+            totalCount=total_found,
+            total_found=total_found,
+            has_more=payload.offset + page_limit < total_found,
             correctedQuery=corrected_query,
         )
         self.cache_service.set_json(
@@ -504,6 +539,15 @@ class TenderHackApiService:
         query_payload = payload["query"]
         corrected_query = query_payload.get("corrected_query")
         normalized_query = query_payload.get("normalized_query")
+        short_personalized_prefix = bool(
+            user_inn
+            and len(tokenize(normalized_query or query)) == 1
+            and 2 <= len(normalize_text(normalized_query or query)) <= 4
+        )
+        same_type_prefix_suggestions = self._build_personalized_product_suggestions(
+            query=query,
+            products=self._resolve_same_type_prefix_products(user_inn=user_inn, query=query),
+        )
         product_suggestions = self._build_personalized_product_suggestions(
             query=query,
             products=self._resolve_suggestion_products(user_inn=user_inn),
@@ -516,10 +560,10 @@ class TenderHackApiService:
                 top_categories=top_categories or [],
             ),
         )
-        suggestions = self._merge_suggestion_groups(
-            product_suggestions,
-            category_suggestions,
-        )
+        suggestion_groups = [same_type_prefix_suggestions]
+        if not (short_personalized_prefix and same_type_prefix_suggestions):
+            suggestion_groups.extend([product_suggestions, category_suggestions])
+        suggestions = self._merge_suggestion_groups(*suggestion_groups)
         if corrected_query and corrected_query != normalized_query:
             suggestions.append(
                 self._build_suggestion(
@@ -534,6 +578,8 @@ class TenderHackApiService:
             query_payload=query_payload,
             results=payload["results"],
         )
+        if short_personalized_prefix and same_type_prefix_suggestions:
+            abstract_suggestions = []
         if suggestions:
             remaining_slots = max(0, top_k - len(self._dedupe_suggestions(suggestions)))
             suggestions.extend(abstract_suggestions[: min(2, remaining_slots)])
@@ -569,6 +615,42 @@ class TenderHackApiService:
         )
 
     @staticmethod
+    def _trim_trailing_connector_tokens(tokens: List[str]) -> List[str]:
+        connector_tokens = {
+            "и",
+            "или",
+            "а",
+            "но",
+            "на",
+            "в",
+            "во",
+            "с",
+            "со",
+            "к",
+            "ко",
+            "о",
+            "об",
+            "обо",
+            "у",
+            "от",
+            "до",
+            "за",
+            "из",
+            "по",
+            "под",
+            "над",
+            "при",
+            "для",
+            "без",
+            "через",
+            "между",
+        }
+        trimmed = list(tokens)
+        while trimmed and (len(trimmed[-1]) <= 1 or trimmed[-1] in connector_tokens):
+            trimmed.pop()
+        return trimmed
+
+    @staticmethod
     def _abstract_name_phrase(name: str, query: str) -> str:
         query_tokens = tokenize(query)
         name_tokens = tokenize(name)
@@ -583,13 +665,16 @@ class TenderHackApiService:
             phrase_tokens.append(token)
             if len(phrase_tokens) >= limit:
                 break
-        if len(phrase_tokens) < 2:
+        phrase_tokens = TenderHackApiService._trim_trailing_connector_tokens(phrase_tokens)
+        min_tokens = 1 if len(query_tokens) <= 1 else 2
+        if len(phrase_tokens) < min_tokens:
             return ""
         return " ".join(phrase_tokens)
 
     @staticmethod
     def _compact_category_phrase(category: str) -> str:
         category_tokens = [token for token in tokenize(category) if not token.isdigit()]
+        category_tokens = TenderHackApiService._trim_trailing_connector_tokens(category_tokens)
         if not category_tokens:
             return ""
         return " ".join(category_tokens[:5])
@@ -703,6 +788,7 @@ class TenderHackApiService:
             if len(phrase_tokens) >= 4:
                 break
 
+        phrase_tokens = cls._trim_trailing_connector_tokens(phrase_tokens)
         phrase = " ".join(phrase_tokens)
         if not phrase:
             return ""
@@ -826,6 +912,294 @@ class TenderHackApiService:
         )
         return frequent_products
 
+    def _resolve_same_type_prefix_products(self, *, user_inn: Optional[str], query: str) -> List[dict]:
+        query_norm = normalize_text(query)
+        if not user_inn or len(tokenize(query_norm)) != 1 or len(query_norm) < 2 or len(query_norm) > 4:
+            return []
+
+        cache_key = self.cache_service.build_key(
+            "same_type_prefix_products",
+            data={
+                "version": 3,
+                "inn": user_inn,
+                "query": query_norm,
+            },
+        )
+        cached_payload = self.cache_service.get_json(cache_key)
+        if isinstance(cached_payload, list):
+            return [item for item in cached_payload if isinstance(item, dict)]
+
+        try:
+            profile = self.personalization_service.build_customer_profile(customer_inn=user_inn, top_ste=200)
+        except Exception:
+            return []
+
+        same_type_peer_inns = [str(value) for value in profile.get("same_type_peer_inns", []) if value]
+        archetype = str(profile.get("institution_archetype") or "general")
+        if not same_type_peer_inns and archetype == "general":
+            return []
+
+        candidate_rows = self.search_service.conn.execute(
+            """
+            SELECT ste_id, clean_name, normalized_name, category, normalized_category
+            FROM ste_catalog
+            WHERE normalized_name LIKE ?
+            ORDER BY length(normalized_name) ASC, normalized_name ASC
+            LIMIT 120
+            """,
+            (f"{query_norm}%",),
+        ).fetchall()
+        if not candidate_rows:
+            return []
+
+        candidate_ids = [str(row["ste_id"]) for row in candidate_rows if row["ste_id"]]
+        same_type_stats = self._load_same_type_prefix_stats(
+            ste_ids=candidate_ids,
+            peer_inns=same_type_peer_inns,
+            archetype_categories=list(profile.get("archetype_categories") or []),
+            customer_inn=user_inn,
+        )
+        if not same_type_stats:
+            return []
+
+        archetype_categories: set[str] = set()
+        category_recommendation_scores: dict[str, float] = {}
+        profile_category_codes = set()
+        for item in profile.get("recommended_categories", []):
+            category_norm = normalize_text(str(item.get("category") or item.get("normalized_category") or ""))
+            recommendation_score = float(item.get("recommendation_score") or item.get("weight") or 0.0)
+            if not category_norm or recommendation_score < 2.0:
+                continue
+            category_recommendation_scores[category_norm] = max(
+                category_recommendation_scores.get(category_norm, 0.0),
+                recommendation_score,
+            )
+            profile_category_codes.update(self._extract_category_codes(category_norm))
+        for item in profile.get("archetype_categories", []):
+            category_norm = normalize_text(str(item.get("category") or item.get("normalized_category") or ""))
+            archetype_weight = float(item.get("weight") or item.get("recommendation_score") or 0.0)
+            if not category_norm or archetype_weight < 0.35:
+                continue
+            archetype_categories.add(category_norm)
+            category_recommendation_scores[category_norm] = max(
+                category_recommendation_scores.get(category_norm, 0.0),
+                archetype_weight,
+            )
+            profile_category_codes.update(self._extract_category_codes(category_norm))
+        recommended_by_ste = {
+            str(item.get("ste_id") or ""): float(item.get("recommendation_score") or 0.0)
+            for item in profile.get("recommended_ste", [])
+            if item.get("ste_id")
+        }
+
+        ranked_products: List[dict] = []
+        for row in candidate_rows:
+            ste_id = str(row["ste_id"] or "")
+            if not ste_id:
+                continue
+            stats = same_type_stats.get(ste_id)
+            if not stats:
+                continue
+            prefix_score = max(
+                self._token_prefix_match_score(query, str(row["clean_name"] or ""), allow_secondary_tokens=False),
+                self._token_prefix_match_score(query, str(row["normalized_name"] or ""), allow_secondary_tokens=False),
+            )
+            if prefix_score <= 0:
+                continue
+            category_norm = normalize_text(str(row["category"] or row["normalized_category"] or ""))
+            exact_category_score = float(category_recommendation_scores.get(category_norm, 0.0))
+            candidate_codes = self._extract_category_codes(category_norm)
+            code_match_score = self._category_code_match_score(candidate_codes, profile_category_codes)
+            code_boost = 14.0 * code_match_score
+            category_boost = 0.0
+            if category_norm and category_norm in archetype_categories:
+                category_boost = 12.0
+            elif exact_category_score > 0:
+                category_boost = min(10.0, exact_category_score * 1.8)
+            recommendation_score = recommended_by_ste.get(ste_id, 0.0)
+            same_type_count = float(stats.get("purchase_count", 0.0) or 0.0)
+            global_count = max(same_type_count, float(stats.get("global_purchase_count", 0.0) or 0.0))
+            specificity = same_type_count / global_count if global_count > 0 else 0.0
+            type_relevance_score = max(category_boost, code_boost)
+            if specificity < 0.20 and type_relevance_score <= 0:
+                continue
+            # For very short prefixes we only keep broadly-supported items when they are
+            # professional for this institution type; generic one-off matches create noisy suggestions.
+            if len(query_norm) <= 4 and type_relevance_score <= 0 and same_type_count < 3:
+                continue
+            if type_relevance_score <= 0 and specificity < 0.45:
+                continue
+
+            popularity_score = min(14.0, 2.5 * math.log1p(same_type_count))
+            specificity_score = 18.0 * specificity
+            peer_recommendation_boost = min(6.0, recommendation_score)
+            generic_penalty = 10.0 if len(query_norm) <= 4 and type_relevance_score <= 0 else 0.0
+            ranked_products.append(
+                {
+                    "steId": ste_id,
+                    "name": str(row["clean_name"] or ste_id),
+                    "category": str(row["category"] or ""),
+                    "purchaseCount": int(same_type_count),
+                    "totalAmount": round(float(stats.get("total_amount", 0.0) or 0.0), 2),
+                    "reason": "Популярно у учреждений того же типа",
+                    "recommendationScore": round(
+                        prefix_score * 0.06
+                        + popularity_score
+                        + specificity_score
+                        + category_boost
+                        + code_boost
+                        + peer_recommendation_boost
+                        - generic_penalty,
+                        4,
+                    ),
+                }
+            )
+
+        ranked_products.sort(
+            key=lambda item: (
+                float(item.get("recommendationScore") or 0.0),
+                float(item.get("purchaseCount") or 0.0),
+                str(item.get("name") or ""),
+            ),
+            reverse=True,
+        )
+        result = ranked_products[:30]
+        self.cache_service.set_json(
+            cache_key,
+            result,
+            ttl_seconds=self.settings.suggestions_cache_ttl_seconds,
+        )
+        return result
+
+    @staticmethod
+    def _extract_category_codes(value: str) -> set[str]:
+        normalized = normalize_text(value)
+        if not normalized:
+            return set()
+        return {
+            match.group(0)
+            for match in re.finditer(r"\b[a-zа-я]\d{2}[a-zа-я]{0,2}\b", normalized)
+        }
+
+    @staticmethod
+    def _category_code_match_score(candidate_codes: set[str], reference_codes: set[str]) -> float:
+        best_score = 0.0
+        for candidate_code in candidate_codes:
+            for reference_code in reference_codes:
+                if candidate_code == reference_code:
+                    best_score = max(best_score, 1.0)
+                    continue
+                if candidate_code.startswith(reference_code) or reference_code.startswith(candidate_code):
+                    best_score = max(best_score, 0.8)
+        return best_score
+
+    @staticmethod
+    def _apply_same_type_prefix_boost(results: List[dict], same_type_prefix_products: List[dict]) -> None:
+        if not results or not same_type_prefix_products:
+            return
+
+        score_by_ste = {
+            str(item.get("steId") or ""): float(item.get("recommendationScore") or 0.0)
+            for item in same_type_prefix_products
+            if item.get("steId")
+        }
+        for item in results:
+            ste_id = str(item.get("ste_id") or "")
+            prefix_score = score_by_ste.get(ste_id)
+            if prefix_score is None:
+                continue
+            boost = min(24.0, 6.0 + prefix_score * 0.4)
+            item["institution_type_prefix_boost"] = round(boost, 4)
+            item["final_score"] = round(float(item.get("final_score", item.get("search_score", 0.0))) + boost, 4)
+            item["top_reason_codes"] = unique_preserve_order(
+                ["INSTITUTION_TYPE_PREFIX_MATCH"] + [str(code) for code in item.get("top_reason_codes", []) if code]
+            )
+            item["reasons"] = unique_preserve_order(
+                ["поднято выше по короткому префиксу с учетом типа учреждения"]
+                + [str(reason) for reason in item.get("reasons", []) if reason]
+            )
+
+    def _load_same_type_prefix_stats(
+        self,
+        *,
+        ste_ids: List[str],
+        peer_inns: List[str],
+        archetype_categories: List[dict],
+        customer_inn: str,
+    ) -> dict[str, dict]:
+        if not ste_ids:
+            return {}
+
+        ste_placeholders = ", ".join("?" for _ in ste_ids)
+        rows = []
+        if peer_inns:
+            peer_placeholders = ", ".join("?" for _ in peer_inns)
+            rows = self.personalization_service.conn.execute(
+                f"""
+                SELECT
+                    cs.ste_id,
+                    SUM(cs.purchase_count) AS purchase_count,
+                    SUM(cs.total_amount) AS total_amount
+                FROM customer_ste_stats cs
+                WHERE cs.customer_inn IN ({peer_placeholders})
+                  AND cs.ste_id IN ({ste_placeholders})
+                GROUP BY cs.ste_id
+                ORDER BY purchase_count DESC, total_amount DESC
+                """,
+                [*peer_inns, *ste_ids],
+            ).fetchall()
+
+        if not rows:
+            category_ids = [int(item.get("category_id") or 0) for item in archetype_categories if int(item.get("category_id") or 0) > 0]
+            if not category_ids:
+                return {}
+            category_placeholders = ", ".join("?" for _ in category_ids)
+            rows = self.personalization_service.conn.execute(
+                f"""
+                SELECT
+                    cs.ste_id,
+                    SUM(cs.purchase_count) AS purchase_count,
+                    SUM(cs.total_amount) AS total_amount
+                FROM customer_ste_stats cs
+                WHERE cs.customer_inn <> ?
+                  AND cs.category_id IN ({category_placeholders})
+                  AND cs.ste_id IN ({ste_placeholders})
+                GROUP BY cs.ste_id
+                ORDER BY purchase_count DESC, total_amount DESC
+                """,
+                [customer_inn, *category_ids, *ste_ids],
+            ).fetchall()
+
+        result = {
+            str(row["ste_id"]): {
+                "purchase_count": float(row["purchase_count"] or 0.0),
+                "total_amount": float(row["total_amount"] or 0.0),
+                "global_purchase_count": 0.0,
+            }
+            for row in rows
+            if row["ste_id"]
+        }
+        if not result:
+            return {}
+
+        ste_placeholders = ", ".join("?" for _ in result)
+        global_rows = self.personalization_service.conn.execute(
+            f"""
+            SELECT
+                ste_id,
+                SUM(purchase_count) AS purchase_count
+            FROM customer_ste_stats
+            WHERE ste_id IN ({ste_placeholders})
+            GROUP BY ste_id
+            """,
+            list(result.keys()),
+        ).fetchall()
+        for row in global_rows:
+            ste_id = str(row["ste_id"] or "")
+            if ste_id in result:
+                result[ste_id]["global_purchase_count"] = float(row["purchase_count"] or 0.0)
+        return result
+
     @classmethod
     def _build_personalized_category_suggestions(
         cls,
@@ -899,10 +1273,12 @@ class TenderHackApiService:
 
             item_reason = str(item.get("reason") or "")
             normalized_reason = item_reason.lower()
-            if "учреждени" in normalized_reason:
-                reason = "Часто закупалось"
+            if "того же типа" in normalized_reason or "рекомендуется для" in normalized_reason:
+                reason = "По типу учреждения"
             elif "похожих учреждений" in normalized_reason:
                 reason = "Популярно у похожих учреждений"
+            elif "учреждени" in normalized_reason:
+                reason = "Часто закупалось"
             elif "регион" in normalized_reason:
                 reason = "Популярно в регионе"
             else:
@@ -955,7 +1331,9 @@ class TenderHackApiService:
     @staticmethod
     def _search_cache_data(payload: SearchRequest, server_session: Optional[dict] = None) -> dict:
         user_context = payload.userContext or SearchUserContext()
+        page_limit = int(payload.limit or payload.topK)
         return {
+            "version": TenderHackApiService.SEARCH_CACHE_VERSION,
             "query": payload.query,
             "user_id": user_context.id,
             "user_inn": user_context.inn,
@@ -965,7 +1343,9 @@ class TenderHackApiService:
             "bounced_categories": unique_preserve_order(
                 [normalize_text(str(value)) for value in payload.bouncedCategories if value]
             ),
-            "top_k": int(payload.topK),
+            "limit": page_limit,
+            "offset": int(payload.offset),
+            "min_score": round(float(payload.min_score), 4),
             "server_session_version": int((server_session or {}).get("version", 0) or 0),
             "server_recent_categories": unique_preserve_order(
                 [str(value) for value in (server_session or {}).get("recent_categories", []) if value]
@@ -996,6 +1376,8 @@ class TenderHackApiService:
 
         if "SESSION_CART_BOOST" in codes or "SESSION_CLICK_BOOST" in codes:
             return "Продолжить подбор в этой категории"
+        if "INSTITUTION_TYPE_PREFIX_MATCH" in codes:
+            return "По типу учреждения"
         if codes & {"USER_CATEGORY_AFFINITY", "USER_REPEAT_BUY", "RECENT_SIMILAR_PURCHASE", "SUPPLIER_AFFINITY"}:
             return "На основе ваших закупок"
         if "REGIONAL_POPULARITY" in codes:

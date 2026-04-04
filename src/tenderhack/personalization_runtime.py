@@ -8,8 +8,9 @@ from typing import Dict, Iterable, List, Optional
 
 from tenderhack.cache import CacheService
 from features.personalization_features import derive_item_kind
+from tenderhack.personalization import ARCHETYPE_KEYWORD_STEMS
 from tenderhack.personalization_model import PersonalizationPredictor
-from tenderhack.text import normalize_text, unique_preserve_order
+from tenderhack.text import normalize_text, stem_tokens, tokenize, unique_preserve_order
 
 
 DEFAULT_PREPROCESSED_DB = Path("data/processed/tenderhack_preprocessed.sqlite")
@@ -67,6 +68,7 @@ class PersonalizationRuntimeService:
         self.personalization_weight = float(personalization_weight)
         self.cache_service = cache_service
         self.base_profile_ttl_seconds = int(base_profile_ttl_seconds)
+        self._archetype_category_ids_cache: Dict[str, List[int]] = {}
 
     def close(self) -> None:
         self.conn.close()
@@ -119,6 +121,7 @@ class PersonalizationRuntimeService:
             candidate_id = str(candidate.get("candidate_id") or candidate.get("ste_id") or "")
             prediction = predictions_by_id.get(candidate_id, {})
             personalization_score = float(prediction.get("personalization_score", 0.0) or 0.0)
+            query_match_quality = self._query_match_quality(candidate)
             dynamic_score, dynamic_reason_codes, dynamic_reasons = self._dynamic_session_adjustment(
                 candidate=candidate,
                 session_state=active_session_state,
@@ -135,11 +138,13 @@ class PersonalizationRuntimeService:
                 user_profile=user_profile,
                 reference_date=active_date,
                 reason_codes=reason_codes,
+                query_match_quality=query_match_quality,
             )
             final_score = (
                 float(candidate.get("search_score", 0.0))
-                + self.personalization_weight * personalization_score
+                + self.personalization_weight * personalization_score * max(0.25, query_match_quality)
                 + dynamic_score
+                + min(6.0, history_priority * 0.03)
             )
             enriched = dict(candidate)
             enriched["base_search_rank"] = index
@@ -147,6 +152,7 @@ class PersonalizationRuntimeService:
             enriched["dynamic_session_score"] = round(dynamic_score, 6)
             enriched["session_priority"] = round(session_priority, 4)
             enriched["history_priority"] = round(history_priority, 4)
+            enriched["query_match_quality"] = round(query_match_quality, 4)
             enriched["top_reason_codes"] = reason_codes
             enriched["reasons"] = reasons
             enriched["final_score"] = round(final_score, 6)
@@ -155,10 +161,10 @@ class PersonalizationRuntimeService:
         reranked.sort(
             key=lambda item: (
                 float(item.get("session_priority", 0.0)),
-                float(item.get("history_priority", 0.0)),
                 float(item.get("final_score", item.get("search_score", 0.0))),
-                float(item.get("personalization_score", 0.0)),
                 float(item.get("search_score", 0.0)),
+                float(item.get("history_priority", 0.0)),
+                float(item.get("personalization_score", 0.0)),
             ),
             reverse=True,
         )
@@ -171,7 +177,10 @@ class PersonalizationRuntimeService:
         user_profile: Dict[str, object],
         reference_date: date,
         reason_codes: List[str],
+        query_match_quality: float,
     ) -> float:
+        if query_match_quality < 0.35:
+            return 0.0
         priority = 0.0
 
         ste_id = str(candidate.get("ste_id") or candidate.get("candidate_id") or "")
@@ -220,7 +229,26 @@ class PersonalizationRuntimeService:
         for code in reason_codes:
             priority += HISTORY_REASON_PRIORITIES.get(str(code), 0.0)
 
-        return priority
+        return priority * min(1.0, query_match_quality)
+
+    @staticmethod
+    def _query_match_quality(candidate: Dict[str, object]) -> float:
+        search_features = dict(candidate.get("search_features") or {})
+        if search_features:
+            exact_phrase = float(search_features.get("exact_phrase", 0.0) or 0.0)
+            full_name_cover = float(search_features.get("full_name_cover", 0.0) or 0.0)
+            corrected_overlap = float(search_features.get("corrected_token_overlap", 0.0) or 0.0)
+            name_overlap = float(search_features.get("name_stem_overlap", 0.0) or 0.0)
+            category_overlap = float(search_features.get("category_stem_overlap", 0.0) or 0.0)
+            semantic_overlap = max(
+                float(search_features.get("semantic_name_overlap", 0.0) or 0.0),
+                float(search_features.get("semantic_category_overlap", 0.0) or 0.0),
+                float(search_features.get("semantic_vector_similarity", 0.0) or 0.0),
+            )
+            lexical_alignment = max(exact_phrase, full_name_cover, corrected_overlap, name_overlap)
+            blended_alignment = 0.60 * lexical_alignment + 0.20 * category_overlap + 0.20 * semantic_overlap
+            return round(min(1.0, max(lexical_alignment, blended_alignment)), 6)
+        return round(min(1.0, float(candidate.get("search_score", 0.0) or 0.0) / 12.0), 6)
 
     @staticmethod
     def _session_priority(reason_codes: List[str]) -> float:
@@ -282,14 +310,19 @@ class PersonalizationRuntimeService:
     ) -> Dict[str, object]:
         profile = self._load_base_profile(customer_inn=customer_inn, customer_region=customer_region)
         profile["user_id"] = user_id
+        profile["customer_inn"] = customer_inn or ""
         if customer_region:
             profile["customer_region"] = customer_region
         self._apply_session_categories(profile=profile, session_categories=session_categories, reference_date=reference_date)
+        archetype, archetype_scores = self._infer_profile_archetype(profile)
+        profile["institution_archetype"] = archetype
+        profile["institution_archetype_scores"] = archetype_scores
         return profile
 
     def _new_profile_template(self, region: Optional[str]) -> Dict[str, object]:
         return {
             "user_id": "UNKNOWN",
+            "customer_inn": "",
             "customer_region": region or "UNKNOWN",
             "total_purchases": 0,
             "total_amount": 0.0,
@@ -305,6 +338,8 @@ class PersonalizationRuntimeService:
             "last_item_kind_purchase_dt": {},
             "recent_purchase_dates": [],
             "recent_category_dates": {},
+            "institution_archetype": "general",
+            "institution_archetype_scores": {},
         }
 
     def _load_base_profile(
@@ -369,6 +404,12 @@ class PersonalizationRuntimeService:
             customer_region=customer_region,
             normalized_category=dominant_category,
         )
+        same_type_customer_stats = self._load_same_type_customer_ste_stats(
+            ste_ids=ste_ids,
+            customer_region=customer_region,
+            archetype=str(user_profile.get("institution_archetype") or "general"),
+            exclude_customer_inn=str(user_profile.get("customer_inn") or ""),
+        )
 
         enriched: List[Dict[str, object]] = []
         for candidate in candidates:
@@ -405,7 +446,13 @@ class PersonalizationRuntimeService:
                 regional_category_stats.get(normalized_category, {}).get("purchase_count", 0.0) or 0.0
             )
             payload["similar_customer_ste_popularity"] = float(
-                similar_customer_stats.get(ste_id, {}).get("purchase_count", 0.0) or 0.0
+                max(
+                    similar_customer_stats.get(ste_id, {}).get("purchase_count", 0.0) or 0.0,
+                    same_type_customer_stats.get(ste_id, {}).get("purchase_count", 0.0) or 0.0,
+                )
+            )
+            payload["same_type_customer_ste_popularity"] = float(
+                same_type_customer_stats.get(ste_id, {}).get("purchase_count", 0.0) or 0.0
             )
             payload["seasonal_category_popularity"] = float(
                 seasonal_category_stats.get(normalized_category, {}).get("purchase_count", 0.0) or 0.0
@@ -860,6 +907,121 @@ class PersonalizationRuntimeService:
             ).fetchall()
             for row in rows:
                 result[str(row["ste_id"])] = {"purchase_count": float(row["purchase_count"] or 0.0)}
+        return result
+
+    def _infer_profile_archetype(self, profile: Dict[str, object]) -> tuple[str, Dict[str, float]]:
+        category_counts = {
+            normalize_text(str(category)): int(count)
+            for category, count in dict(profile.get("category_counts", {})).items()
+            if category
+        }
+        if not category_counts:
+            return "general", {}
+
+        scores = {archetype: 0.0 for archetype in ARCHETYPE_KEYWORD_STEMS}
+        for category, purchase_count in category_counts.items():
+            category_stems = set(stem_tokens(tokenize(category)))
+            if not category_stems:
+                continue
+            signal_strength = 1.0 + min(float(purchase_count) / 40.0, 2.0)
+            for archetype, keyword_stems in ARCHETYPE_KEYWORD_STEMS.items():
+                if self._match_keyword_stems(category_stems, keyword_stems):
+                    scores[archetype] += signal_strength
+
+        rounded_scores = {key: round(value, 4) for key, value in scores.items() if value > 0}
+        if not rounded_scores:
+            return "general", {}
+        archetype, archetype_score = max(scores.items(), key=lambda item: item[1])
+        if archetype_score < 0.75:
+            return "general", rounded_scores
+        return archetype, rounded_scores
+
+    @staticmethod
+    def _match_keyword_stems(category_stems: set[str], keyword_stems: set[str]) -> bool:
+        if not category_stems or not keyword_stems:
+            return False
+        for category_stem in category_stems:
+            for keyword_stem in keyword_stems:
+                if category_stem.startswith(keyword_stem) or keyword_stem.startswith(category_stem):
+                    return True
+        return False
+
+    def _load_archetype_category_ids(self, archetype: str) -> List[int]:
+        if archetype in self._archetype_category_ids_cache:
+            return list(self._archetype_category_ids_cache[archetype])
+        keyword_stems = ARCHETYPE_KEYWORD_STEMS.get(archetype, set())
+        if not keyword_stems:
+            self._archetype_category_ids_cache[archetype] = []
+            return []
+        rows = self.conn.execute(
+            """
+            SELECT category_id, normalized_category
+            FROM category_lookup
+            """
+        ).fetchall()
+        category_ids = []
+        for row in rows:
+            category_stems = set(stem_tokens(tokenize(str(row["normalized_category"] or ""))))
+            if self._match_keyword_stems(category_stems, keyword_stems):
+                category_ids.append(int(row["category_id"]))
+        self._archetype_category_ids_cache[archetype] = category_ids
+        return list(category_ids)
+
+    def _load_same_type_customer_ste_stats(
+        self,
+        *,
+        ste_ids: List[str],
+        customer_region: str,
+        archetype: str,
+        exclude_customer_inn: str,
+    ) -> Dict[str, Dict[str, float]]:
+        if not ste_ids or not archetype or archetype == "general":
+            return {}
+        category_ids = self._load_archetype_category_ids(archetype)
+        if not category_ids:
+            return {}
+
+        placeholders_ste = ",".join("?" for _ in ste_ids)
+        placeholders_category = ",".join("?" for _ in category_ids)
+        result: Dict[str, Dict[str, float]] = {}
+
+        if customer_region:
+            rows = self.conn.execute(
+                f"""
+                SELECT
+                    cs.ste_id,
+                    SUM(cs.purchase_count) AS purchase_count
+                FROM customer_ste_stats cs
+                JOIN customer_region_lookup cr ON cr.customer_inn = cs.customer_inn
+                WHERE cs.ste_id IN ({placeholders_ste})
+                  AND cs.category_id IN ({placeholders_category})
+                  AND cs.customer_inn <> ?
+                  AND cr.customer_region = ?
+                GROUP BY cs.ste_id
+                """,
+                [*ste_ids, *category_ids, exclude_customer_inn, customer_region],
+            ).fetchall()
+            for row in rows:
+                result[str(row["ste_id"])] = {"purchase_count": float(row["purchase_count"] or 0.0)}
+
+        rows = self.conn.execute(
+            f"""
+            SELECT
+                cs.ste_id,
+                SUM(cs.purchase_count) AS purchase_count
+            FROM customer_ste_stats cs
+            WHERE cs.ste_id IN ({placeholders_ste})
+              AND cs.category_id IN ({placeholders_category})
+              AND cs.customer_inn <> ?
+            GROUP BY cs.ste_id
+            """,
+            [*ste_ids, *category_ids, exclude_customer_inn],
+        ).fetchall()
+        for row in rows:
+            ste_id = str(row["ste_id"])
+            purchase_count = float(row["purchase_count"] or 0.0)
+            existing = float(result.get(ste_id, {}).get("purchase_count", 0.0) or 0.0)
+            result[ste_id] = {"purchase_count": max(existing, purchase_count)}
         return result
 
     @staticmethod

@@ -430,7 +430,40 @@ class SearchService:
         }
         return score, features
 
-    def search(self, query: str, top_k: int = 20, candidate_limit: int = 250) -> Dict[str, object]:
+    @staticmethod
+    def _semantic_score(item: Dict[str, object]) -> float:
+        search_features = dict(item.get("search_features") or {})
+        return max(
+            float(search_features.get("semantic_vector_similarity", 0.0) or 0.0),
+            float(search_features.get("semantic_name_overlap", 0.0) or 0.0),
+            float(search_features.get("semantic_category_overlap", 0.0) or 0.0),
+            float(search_features.get("semantic_key_overlap", 0.0) or 0.0),
+        )
+
+    @classmethod
+    def _passes_min_score(cls, item: Dict[str, object], min_score: float) -> bool:
+        search_features = dict(item.get("search_features") or {})
+        semantic_score = cls._semantic_score(item)
+        exact_lexical_match = max(
+            float(search_features.get("exact_phrase", 0.0) or 0.0),
+            float(search_features.get("full_name_cover", 0.0) or 0.0),
+            float(search_features.get("full_category_cover", 0.0) or 0.0),
+            float(search_features.get("corrected_token_overlap", 0.0) or 0.0),
+        )
+        # We cut low-confidence semantic noise, but we keep exact lexical hits:
+        # model numbers, article codes and short catalog queries are often valid
+        # even when the semantic backend gives them a low vector similarity.
+        return semantic_score >= min_score or exact_lexical_match >= 1.0
+
+    def search(
+        self,
+        query: str,
+        top_k: int = 20,
+        candidate_limit: int = 250,
+        limit: int | None = None,
+        offset: int = 0,
+        min_score: float = 0.55,
+    ) -> Dict[str, object]:
         analysis = self.analyze_query(query)
         retrieval_limit = max(candidate_limit, 400) if self._needs_broader_retrieval(analysis) else candidate_limit
         candidates = self._fetch_candidates(analysis, candidate_limit=retrieval_limit)
@@ -447,6 +480,15 @@ class SearchService:
                     "attribute_keys": row["attribute_keys"],
                     "attribute_count": int(row["attribute_count"] or 0),
                     "key_tokens": row["key_tokens"],
+                    "semantic_score": round(
+                        max(
+                            float(features.get("semantic_vector_similarity", 0.0) or 0.0),
+                            float(features.get("semantic_name_overlap", 0.0) or 0.0),
+                            float(features.get("semantic_category_overlap", 0.0) or 0.0),
+                            float(features.get("semantic_key_overlap", 0.0) or 0.0),
+                        ),
+                        4,
+                    ),
                     "search_score": round(lexical_score, 4),
                     "search_features": features,
                 }
@@ -461,6 +503,9 @@ class SearchService:
             ),
             reverse=True,
         )
+        filtered_results = [item for item in scored_results if self._passes_min_score(item, min_score)]
+        page_limit = max(1, limit or top_k)
+        paginated_results = filtered_results[offset : offset + page_limit]
         return {
             "query": {
                 "original_query": analysis.original_query,
@@ -475,16 +520,19 @@ class SearchService:
                 "completion_expansions": analysis.completion_expansions,
                 "semantic_expansions": analysis.semantic_expansions,
             },
-            "results": scored_results[:top_k],
+            "results": paginated_results,
+            "total_found": len(filtered_results),
+            "has_more": offset + page_limit < len(filtered_results),
         }
 
-    def search_ste(self, query: str, top_k: int = 20) -> List[Dict[str, object]]:
-        return self.search(query, top_k=top_k)["results"]
+    def search_ste(self, query: str, top_k: int = 20, min_score: float = 0.55) -> List[Dict[str, object]]:
+        return self.search(query, top_k=top_k, min_score=min_score)["results"]
 
 
 def search_ste(
     query: str,
     top_k: int = 20,
+    min_score: float = 0.55,
     search_db_path: Path | str = DEFAULT_SEARCH_DB,
     synonyms_path: Path | str = DEFAULT_SYNONYMS_PATH,
     semantic_backend: str = "auto",
@@ -497,6 +545,6 @@ def search_ste(
         fasttext_model_path=fasttext_model_path,
     )
     try:
-        return service.search_ste(query=query, top_k=top_k)
+        return service.search_ste(query=query, top_k=top_k, min_score=min_score)
     finally:
         service.close()

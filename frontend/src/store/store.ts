@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { User, Product, AutocompleteSuggestion } from '../types';
+import { User, Product, AutocompleteSuggestion, SearchResponse } from '../types';
 import { sendEvent } from '../api';
 
 interface StoreState {
@@ -19,12 +19,18 @@ interface StoreState {
   isSearching: boolean;
   suggestions: AutocompleteSuggestion[];
   correctedQuery: string | null;
+  totalFound: number;
+  hasMore: boolean;
+  searchOffset: number;
+  searchLimit: number;
+  minScore: number;
 
   setSearchQuery: (query: string) => void;
-  setResults: (results: Product[]) => void;
   setIsSearching: (isSearching: boolean) => void;
   setSuggestions: (suggestions: AutocompleteSuggestion[]) => void;
   setCorrectedQuery: (query: string | null) => void;
+  setSearchResponse: (response: SearchResponse, append?: boolean) => void;
+  resetSearchResults: () => void;
 
   // Actions
   trackProductParams: (category: string) => void;
@@ -54,6 +60,9 @@ export const useStore = create<StoreState>((set, get) => ({
       searchQuery: '',
       suggestions: [],
       correctedQuery: null,
+      totalFound: 0,
+      hasMore: false,
+      searchOffset: 0,
     }),
 
   viewedCategories: [],
@@ -66,12 +75,34 @@ export const useStore = create<StoreState>((set, get) => ({
   isSearching: false,
   suggestions: [],
   correctedQuery: null,
+  totalFound: 0,
+  hasMore: false,
+  searchOffset: 0,
+  searchLimit: 20,
+  minScore: 0.55,
 
   setSearchQuery: (query) => set({ searchQuery: query }),
-  setResults: (results) => set({ results }),
   setIsSearching: (isSearching) => set({ isSearching }),
   setSuggestions: (suggestions) => set({ suggestions }),
   setCorrectedQuery: (query) => set({ correctedQuery: query }),
+  setSearchResponse: (response, append = false) =>
+    set((state) => {
+      const nextResults = append ? [...state.results, ...response.items] : response.items;
+      const totalFound = response.total_found ?? response.totalCount ?? nextResults.length;
+      return {
+        results: nextResults,
+        totalFound,
+        hasMore: response.has_more,
+        searchOffset: nextResults.length,
+      };
+    }),
+  resetSearchResults: () =>
+    set({
+      results: [],
+      totalFound: 0,
+      hasMore: false,
+      searchOffset: 0,
+    }),
 
   trackProductParams: (category) =>
     set((state) => ({

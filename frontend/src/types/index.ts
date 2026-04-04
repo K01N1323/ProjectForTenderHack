@@ -34,6 +34,8 @@ export interface Product {
 export interface SearchResponse {
     items: Product[];
     totalCount: number;
+    total_found: number;
+    has_more: boolean;
     correctedQuery?: string; // Если была опечатка
 }
 

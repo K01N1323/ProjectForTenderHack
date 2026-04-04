@@ -129,28 +129,28 @@ class SearchServiceTests(unittest.TestCase):
         self.service.close()
 
     def test_exact_search_returns_relevant_ste(self) -> None:
-        results = self.service.search_ste("парацетамол 500 мг", top_k=3)
+        results = self.service.search_ste("парацетамол 500 мг", top_k=3, min_score=0.0)
         self.assertTrue(results)
         self.assertEqual(results[0]["ste_id"], "ste-3")
 
     def test_typo_correction_updates_query_and_result(self) -> None:
-        payload = self.service.search("парацетомол 500 мг", top_k=3)
+        payload = self.service.search("парацетомол 500 мг", top_k=3, min_score=0.0)
         self.assertEqual(payload["query"]["corrected_query"], "парацетамол 500 мг")
         self.assertEqual(payload["query"]["applied_corrections"][0]["target"], "парацетамол")
         self.assertEqual(payload["results"][0]["ste_id"], "ste-3")
 
     def test_synonym_query_finds_flash_drive(self) -> None:
-        payload = self.service.search("флешка 16 гб", top_k=3)
+        payload = self.service.search("флешка 16 гб", top_k=3, min_score=0.0)
         self.assertTrue(payload["query"]["applied_synonyms"])
         self.assertEqual(payload["results"][0]["ste_id"], "ste-2")
 
     def test_wordform_query_matches_stationery_pen_category(self) -> None:
-        payload = self.service.search("канцелярские ручки", top_k=3)
+        payload = self.service.search("канцелярские ручки", top_k=3, min_score=0.0)
         self.assertEqual(payload["results"][0]["ste_id"], "ste-1")
         self.assertEqual(payload["results"][0]["category"], "Ручки канцелярские")
 
     def test_semantic_neighbors_are_applied_for_acronym_query(self) -> None:
-        payload = self.service.search("мфу", top_k=3)
+        payload = self.service.search("мфу", top_k=3, min_score=0.0)
         self.assertEqual(payload["results"][0]["ste_id"], "ste-4")
         self.assertTrue(payload["query"]["applied_semantic_neighbors"])
         semantic_targets = {
@@ -162,8 +162,44 @@ class SearchServiceTests(unittest.TestCase):
         self.assertTrue({"многофункциональное", "устройство"} & semantic_targets)
         self.assertGreater(payload["results"][0]["search_features"]["semantic_name_overlap"], 0.0)
 
+    def test_min_score_filters_low_semantic_matches_but_keeps_exact_lexical_hits(self) -> None:
+        self.assertFalse(
+            self.service._passes_min_score(
+                {
+                    "search_features": {
+                        "semantic_vector_similarity": 0.18,
+                        "semantic_name_overlap": 0.12,
+                        "semantic_category_overlap": 0.14,
+                        "semantic_key_overlap": 0.10,
+                        "exact_phrase": 0.0,
+                        "full_name_cover": 0.0,
+                        "full_category_cover": 0.0,
+                        "corrected_token_overlap": 0.4,
+                    }
+                },
+                min_score=0.55,
+            )
+        )
+        self.assertTrue(
+            self.service._passes_min_score(
+                {
+                    "search_features": {
+                        "semantic_vector_similarity": 0.05,
+                        "semantic_name_overlap": 0.0,
+                        "semantic_category_overlap": 0.0,
+                        "semantic_key_overlap": 0.0,
+                        "exact_phrase": 1.0,
+                        "full_name_cover": 0.0,
+                        "full_category_cover": 0.0,
+                        "corrected_token_overlap": 0.0,
+                    }
+                },
+                min_score=0.55,
+            )
+        )
+
     def test_incomplete_word_query_uses_completions_without_bad_short_correction(self) -> None:
-        payload = self.service.search("мног", top_k=3)
+        payload = self.service.search("мног", top_k=3, min_score=0.0)
         self.assertEqual(payload["results"][0]["ste_id"], "ste-4")
         self.assertEqual(payload["query"]["corrected_query"], "мног")
         self.assertFalse(payload["query"]["applied_corrections"])
@@ -176,7 +212,7 @@ class SearchServiceTests(unittest.TestCase):
         self.assertIn("многофункциональное", completion_targets)
 
     def test_incomplete_category_prefix_adds_completion_variants(self) -> None:
-        payload = self.service.search("канц", top_k=3)
+        payload = self.service.search("канц", top_k=3, min_score=0.0)
         self.assertEqual(payload["results"][0]["ste_id"], "ste-1")
         completion_targets = {
             target
@@ -185,6 +221,12 @@ class SearchServiceTests(unittest.TestCase):
             for target in item["targets"]
         }
         self.assertTrue({"канцелярская", "канцелярские"} & completion_targets)
+
+    def test_search_returns_pagination_metadata(self) -> None:
+        payload = self.service.search("ручка", limit=1, offset=0, min_score=0.0)
+        self.assertEqual(payload["total_found"], 1)
+        self.assertFalse(payload["has_more"])
+        self.assertEqual(len(payload["results"]), 1)
 
 
 if __name__ == "__main__":

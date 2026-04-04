@@ -114,6 +114,42 @@ class ApiTests(unittest.TestCase):
                     "труба стальная 20 мм",
                 ]
             )
+            writer.writerow(
+                [
+                    "ste-6",
+                    "Стул на металлическом каркасе",
+                    "стул на металлическом каркасе",
+                    "Стулья офисные",
+                    "стулья офисные",
+                    "Материал | Каркас",
+                    "2",
+                    "стул металлический каркас офисный",
+                ]
+            )
+            writer.writerow(
+                [
+                    "ste-7",
+                    "Альбумин человеческий 20 процентов 100 мл",
+                    "альбумин человеческий 20 процентов 100 мл",
+                    "Плазмозамещающие и перфузионные растворы",
+                    "плазмозамещающие и перфузионные растворы",
+                    "Концентрация | Объем",
+                    "2",
+                    "альбумин человеческий 20 процентов 100 мл плазмозамещающие",
+                ]
+            )
+            writer.writerow(
+                [
+                    "ste-8",
+                    "Альбом для рисования А4",
+                    "альбом для рисования а4",
+                    "Альбомы для рисования",
+                    "альбомы для рисования",
+                    "Формат | Листы",
+                    "2",
+                    "альбом для рисования а4 бумага",
+                ]
+            )
 
         with cls.raw_catalog_path.open("w", encoding="utf-8", newline="") as handle:
             writer = csv.writer(handle, delimiter=";")
@@ -155,6 +191,30 @@ class ApiTests(unittest.TestCase):
                     "Труба стальная 20 мм",
                     "Трубы стальные",
                     "Диаметр:20 мм;Материал:сталь;Тип:круглая",
+                ]
+            )
+            writer.writerow(
+                [
+                    "ste-6",
+                    "Стул на металлическом каркасе",
+                    "Стулья офисные",
+                    "Материал:металл;Каркас:металлический;Цвет:черный",
+                ]
+            )
+            writer.writerow(
+                [
+                    "ste-7",
+                    "Альбумин человеческий 20 процентов 100 мл",
+                    "Плазмозамещающие и перфузионные растворы",
+                    "Концентрация:20 процентов;Объем:100 мл;Форма:раствор",
+                ]
+            )
+            writer.writerow(
+                [
+                    "ste-8",
+                    "Альбом для рисования А4",
+                    "Альбомы для рисования",
+                    "Формат:А4;Листы:24;Бумага:офсет",
                 ]
             )
 
@@ -247,6 +307,8 @@ class ApiTests(unittest.TestCase):
                     (2, "Usb-накопители твердотельные (флеш-драйвы)", "usb накопители твердотельные флеш драйвы"),
                     (3, "Анальгетики и антипиретики (n02bg)", "анальгетики и антипиретики n02bg"),
                     (4, "Трубы стальные", "трубы стальные"),
+                    (5, "Плазмозамещающие и перфузионные растворы", "плазмозамещающие и перфузионные растворы"),
+                    (6, "Альбомы для рисования", "альбомы для рисования"),
                 ],
             )
             conn.executemany(
@@ -257,6 +319,10 @@ class ApiTests(unittest.TestCase):
                 """,
                 [
                     ("7701234567", 1, 5, 1500.0, "2024-01-01", "2025-01-10"),
+                    ("7707654321", 3, 12, 4200.0, "2024-01-01", "2025-01-10"),
+                    ("7707654322", 5, 18, 18000.0, "2024-01-01", "2025-01-10"),
+                    ("7707654322", 3, 6, 2400.0, "2024-01-01", "2025-01-10"),
+                    ("7707654322", 6, 1, 200.0, "2024-01-01", "2025-01-10"),
                 ],
             )
             conn.executemany(
@@ -268,6 +334,10 @@ class ApiTests(unittest.TestCase):
                 [
                     ("7701234567", "ste-1", 1, 4, 900.0, "2024-01-01", "2025-01-10"),
                     ("7701234567", "ste-3", 3, 1, 110.0, "2024-06-10", "2024-06-10"),
+                    ("7707654321", "ste-3", 3, 7, 980.0, "2024-01-01", "2025-01-10"),
+                    ("7707654322", "ste-7", 5, 14, 16500.0, "2024-01-01", "2025-01-10"),
+                    ("7707654322", "ste-3", 3, 4, 540.0, "2024-01-01", "2025-01-10"),
+                    ("7707654322", "ste-8", 6, 1, 200.0, "2024-01-01", "2025-01-10"),
                 ],
             )
             conn.executemany(
@@ -279,11 +349,16 @@ class ApiTests(unittest.TestCase):
                 [
                     ("Москва", 1, 11, 3300.0, "2024-01-01", "2025-01-10"),
                     ("Москва", 3, 8, 980.0, "2024-01-01", "2025-01-10"),
+                    ("Москва", 5, 19, 21000.0, "2024-01-01", "2025-01-10"),
                 ],
             )
-            conn.execute(
+            conn.executemany(
                 "INSERT INTO customer_region_lookup (customer_inn, customer_region, frequency) VALUES (?, ?, ?)",
-                ("7701234567", "Москва", 6),
+                [
+                    ("7701234567", "Москва", 6),
+                    ("7707654321", "Москва", 5),
+                    ("7707654322", "Москва", 5),
+                ],
             )
             conn.executemany(
                 """
@@ -297,6 +372,8 @@ class ApiTests(unittest.TestCase):
                     ("ste-3", "7777777777", "Москва", 3, 120.0, 99.0, "2025-01-12"),
                     ("ste-4", "8888888888", "Москва", 2, 240.0, 219.0, "2025-01-15"),
                     ("ste-5", "9999999999", "Москва", 5, 820.0, 790.0, "2025-01-20"),
+                    ("ste-7", "1111111111", "Москва", 4, 1450.0, 1390.0, "2025-01-22"),
+                    ("ste-8", "2222222222", "Москва", 1, 120.0, 110.0, "2025-01-22"),
                 ],
             )
             conn.commit()
@@ -367,6 +444,68 @@ class ApiTests(unittest.TestCase):
             search_service.close()
             runtime_service.close()
 
+    def test_runtime_does_not_promote_history_above_stronger_query_match(self) -> None:
+        runtime_service = PersonalizationRuntimeService(db_path=self.preprocessed_db_path)
+        try:
+            reranked = runtime_service.rerank_candidates(
+                query="флеш накопитель",
+                candidates=[
+                    {
+                        "ste_id": "ste-1",
+                        "clean_name": "Ручка канцелярская синяя",
+                        "normalized_name": "ручка канцелярская синяя",
+                        "category": "Ручки канцелярские",
+                        "normalized_category": "ручки канцелярские",
+                        "attribute_keys": "Цвет | Тип",
+                        "attribute_count": 2,
+                        "key_tokens": "ручка канцелярская синяя шариковая",
+                        "search_score": 7.0,
+                        "search_features": {
+                            "exact_phrase": 0.0,
+                            "full_name_cover": 0.0,
+                            "full_category_cover": 0.0,
+                            "corrected_token_overlap": 0.0,
+                            "name_stem_overlap": 0.0,
+                            "category_stem_overlap": 0.0,
+                            "semantic_name_overlap": 0.05,
+                            "semantic_category_overlap": 0.0,
+                            "semantic_vector_similarity": 0.08,
+                        },
+                    },
+                    {
+                        "ste_id": "ste-2",
+                        "clean_name": "Флеш накопитель 16 ГБ USB 3.0",
+                        "normalized_name": "флеш накопитель 16 гб usb 3 0",
+                        "category": "Usb-накопители твердотельные (флеш-драйвы)",
+                        "normalized_category": "usb накопители твердотельные флеш драйвы",
+                        "attribute_keys": "Объем | Интерфейс",
+                        "attribute_count": 2,
+                        "key_tokens": "флеш накопитель 16 гб usb накопитель",
+                        "search_score": 14.0,
+                        "search_features": {
+                            "exact_phrase": 1.0,
+                            "full_name_cover": 1.0,
+                            "full_category_cover": 0.0,
+                            "corrected_token_overlap": 1.0,
+                            "name_stem_overlap": 1.0,
+                            "category_stem_overlap": 0.4,
+                            "semantic_name_overlap": 0.4,
+                            "semantic_category_overlap": 0.2,
+                            "semantic_vector_similarity": 0.72,
+                        },
+                    },
+                ],
+                user_id="user-7701234567",
+                customer_inn="7701234567",
+                customer_region="Москва",
+                session_categories=[],
+            )
+            self.assertEqual(reranked[0]["ste_id"], "ste-2")
+            self.assertEqual(reranked[0]["query_match_quality"], 1.0)
+            self.assertEqual(reranked[1]["history_priority"], 0.0)
+        finally:
+            runtime_service.close()
+
     def test_runtime_prioritizes_purchase_history_over_plain_search_score(self) -> None:
         runtime_service = PersonalizationRuntimeService(db_path=self.preprocessed_db_path)
         try:
@@ -374,12 +513,23 @@ class ApiTests(unittest.TestCase):
                 query="ручка",
                 candidates=[
                     {
-                        "ste_id": "ste-2",
-                        "clean_name": "Флеш накопитель 16 ГБ USB 3.0",
-                        "normalized_name": "флеш накопитель 16 гб usb 3 0",
-                        "category": "Usb-накопители твердотельные (флеш-драйвы)",
-                        "normalized_category": "usb накопители твердотельные флеш драйвы",
-                        "search_score": 100.0,
+                        "ste_id": "ste-4",
+                        "clean_name": "Ручка офисная красная",
+                        "normalized_name": "ручка офисная красная",
+                        "category": "Ручки канцелярские",
+                        "normalized_category": "ручки канцелярские",
+                        "search_score": 12.0,
+                        "search_features": {
+                            "exact_phrase": 0.0,
+                            "full_name_cover": 0.0,
+                            "full_category_cover": 1.0,
+                            "corrected_token_overlap": 1.0,
+                            "name_stem_overlap": 1.0,
+                            "category_stem_overlap": 1.0,
+                            "semantic_name_overlap": 0.2,
+                            "semantic_category_overlap": 0.2,
+                            "semantic_vector_similarity": 0.5,
+                        },
                     },
                     {
                         "ste_id": "ste-1",
@@ -388,6 +538,17 @@ class ApiTests(unittest.TestCase):
                         "category": "Ручки канцелярские",
                         "normalized_category": "ручки канцелярские",
                         "search_score": 10.0,
+                        "search_features": {
+                            "exact_phrase": 0.0,
+                            "full_name_cover": 0.0,
+                            "full_category_cover": 1.0,
+                            "corrected_token_overlap": 1.0,
+                            "name_stem_overlap": 1.0,
+                            "category_stem_overlap": 1.0,
+                            "semantic_name_overlap": 0.3,
+                            "semantic_category_overlap": 0.2,
+                            "semantic_vector_similarity": 0.55,
+                        },
                     },
                 ],
                 user_id="user-7701234567",
@@ -397,7 +558,7 @@ class ApiTests(unittest.TestCase):
             )
             self.assertEqual(reranked[0]["ste_id"], "ste-1")
             self.assertGreater(reranked[0]["history_priority"], 0.0)
-            self.assertEqual(reranked[1]["history_priority"], 0.0)
+            self.assertGreater(reranked[0]["history_priority"], reranked[1]["history_priority"])
         finally:
             runtime_service.close()
 
@@ -421,6 +582,8 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertGreaterEqual(payload["totalCount"], 1)
+        self.assertEqual(payload["total_found"], payload["totalCount"])
+        self.assertIs(payload["has_more"], False)
         self.assertEqual(payload["items"][0]["id"], "ste-1")
         self.assertEqual(payload["items"][0]["supplierInn"], "1234567890")
         self.assertAlmostEqual(payload["items"][0]["price"], 199.99)
@@ -512,6 +675,58 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["correctedQuery"], "парацетамол 500 мг")
+        self.assertIn("total_found", payload)
+        self.assertIn("has_more", payload)
+
+    def test_search_supports_limit_offset_and_has_more(self) -> None:
+        request_payload = {
+            "query": "ручка",
+            "userContext": None,
+            "viewedCategories": [],
+            "bouncedCategories": [],
+            "limit": 1,
+            "offset": 0,
+            "min_score": 0.0,
+        }
+        first_page = self.client.post("/api/search", json=request_payload)
+        self.assertEqual(first_page.status_code, 200)
+        first_payload = first_page.json()
+        self.assertEqual(len(first_payload["items"]), 1)
+        self.assertGreaterEqual(first_payload["total_found"], 2)
+        self.assertTrue(first_payload["has_more"])
+
+        second_page = self.client.post(
+            "/api/search",
+            json={**request_payload, "offset": 1},
+        )
+        self.assertEqual(second_page.status_code, 200)
+        second_payload = second_page.json()
+        self.assertEqual(second_payload["total_found"], first_payload["total_found"])
+        self.assertEqual(len(second_payload["items"]), 1)
+        self.assertNotEqual(first_payload["items"][0]["id"], second_payload["items"][0]["id"])
+
+    def test_search_short_prefix_can_surface_same_type_professional_item(self) -> None:
+        response = self.client.post(
+            "/api/search",
+            json={
+                "query": "аль",
+                "userContext": {
+                    "id": "user-7707654321",
+                    "inn": "7707654321",
+                    "region": "Москва",
+                    "viewedCategories": [],
+                },
+                "viewedCategories": [],
+                "bouncedCategories": [],
+                "topK": 5,
+                "min_score": 0.0,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        item_ids = [item["id"] for item in payload["items"]]
+        self.assertIn("ste-7", item_ids)
+        self.assertLess(item_ids.index("ste-7"), item_ids.index("ste-8"))
 
     def test_suggestions_return_correction_and_abstract_phrases(self) -> None:
         response = self.client.get("/api/search/suggestions", params={"q": "флешка"})
@@ -571,6 +786,37 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(payload[0]["text"], "труба")
         self.assertEqual(payload[0]["type"], "correction")
         self.assertEqual(payload[0]["reason"], "Исправление запроса")
+
+    def test_suggestions_prioritize_same_type_professional_prefix_products(self) -> None:
+        response = self.client.get(
+            "/api/search/suggestions",
+            params={
+                "q": "аль",
+                "inn": "7707654321",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload)
+        suggestion_texts = self._suggestion_texts(payload)
+        self.assertIn("Альбумин человеческий", suggestion_texts)
+        self.assertNotIn("Альбом для рисования", suggestion_texts)
+        albumin_item = next(item for item in payload if item["text"] == "Альбумин человеческий")
+        self.assertEqual(albumin_item["reason"], "По типу учреждения")
+
+    def test_suggestions_trim_trailing_prepositions_from_product_phrases(self) -> None:
+        response = self.client.get(
+            "/api/search/suggestions",
+            params={
+                "q": "сту",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload)
+        suggestion_texts = self._suggestion_texts(payload)
+        self.assertNotIn("стул на", [text.lower() for text in suggestion_texts])
+        self.assertIn("стул", [text.lower() for text in suggestion_texts])
 
 
 if __name__ == "__main__":
