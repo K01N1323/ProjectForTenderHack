@@ -17,3 +17,5 @@ data/processed/
 reports/
 
 venv/
+frontend/node_modules/
+frontend/package-lock.json
