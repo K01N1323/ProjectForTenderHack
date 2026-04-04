@@ -98,13 +98,21 @@ const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
                                 </div>
                                 <div className="mt-2 text-[#777f8c] text-[15px]">Штука</div>
                             </div>
-                            <div className="text-right">
+                            <div className="flex flex-col items-end gap-2 text-right">
                                 <div className="text-[15px] text-[#9ca3af] italic">
                                     {product.price.toLocaleString('ru-RU')} ₽
                                 </div>
-                                <div className="mt-2 text-[13px] uppercase tracking-wide text-[#b3b9c3]">
-                                    В каталоге
-                                </div>
+                                <button
+                                    type="button"
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        addToCart(product);
+                                    }}
+                                    className="inline-flex items-center justify-center rounded border border-[#da291c] p-2 text-[#da291c] transition-colors hover:bg-red-50"
+                                    title="Добавить в корзину"
+                                >
+                                    <ShoppingCart size={18} />
+                                </button>
                             </div>
                         </div>
                     </div>
@@ -148,7 +156,7 @@ const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
                             
                             <div className="bg-blue-50 border border-blue-100 p-4 mb-8 text-blue-800 text-sm">
                                 <p className="font-semibold mb-1">Режим имитации пользовательского опыта</p>
-                                Закройте это окно <strong>быстрее, чем за 3 секунды</strong>, чтобы система засчитала быстрый отказ. В результате эта категория товаров будет реже появляться в ленте.
+                                Закройте это окно <strong>быстрее, чем за 2 секунды</strong>, чтобы система засчитала быстрый отказ. В результате эта категория товаров будет реже появляться в ленте.
                             </div>
 
                             <div className="flex items-end justify-between gap-4">
@@ -159,9 +167,9 @@ const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
                                     type="button"
                                     onClick={(e) => {
                                         e.stopPropagation();
-                                        addToCart(product.id, product.category);
+                                        addToCart(product);
                                     }}
-                                    className="inline-flex items-center gap-2 bg-[#d63d2b] hover:bg-[#bf3324] text-white px-5 py-3 font-semibold transition-colors"
+                                    className="inline-flex items-center gap-2 bg-[#da291c] hover:bg-[#bf2418] text-white px-5 py-3 font-semibold transition-colors"
                                 >
                                     <ShoppingCart size={18} />
                                     Добавить в корзину

@@ -24,33 +24,11 @@ from tenderhack.cache import CacheService
 from tenderhack.descriptions import CatalogDescriptionService
 from tenderhack.online_state import OnlineStateService
 from tenderhack.offers import OfferLookupService
+from tenderhack.penalization import InMemorySkipStorage, InteractionTracker, RankingModifier
 from tenderhack.personalization import PersonalizationService
 from tenderhack.personalization_runtime import PersonalizationRuntimeService
 from tenderhack.search import SearchService
-from tenderhack.search_rerank_model import SearchRerankPredictor
 from tenderhack.text import normalize_text, stem_token, tokenize, unique_preserve_order
-
-
-def _discover_search_rerank_model_path(project_root: Path) -> Path:
-    candidates = [
-        project_root / "data" / "processed" / "tenderhack_yeti_ranker.cbm",
-        project_root / "data" / "processed" / "tenderhack_yeti_ranker_small.cbm",
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    return candidates[0]
-
-
-def _discover_search_rerank_metadata_path(project_root: Path) -> Path:
-    candidates = [
-        project_root / "data" / "processed" / "tenderhack_yeti_ranker.json",
-        project_root / "data" / "processed" / "tenderhack_yeti_ranker_small.json",
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    return candidates[0]
 
 
 @dataclass
@@ -60,8 +38,6 @@ class AppSettings:
     synonyms_path: Path = PROJECT_ROOT / "data" / "reference" / "search_synonyms.json"
     fasttext_model_path: Path = PROJECT_ROOT / "data" / "processed" / "tenderhack_fasttext.bin"
     personalization_model_path: Path = PROJECT_ROOT / "artifacts" / "personalization_model.cbm"
-    search_rerank_model_path: Path = _discover_search_rerank_model_path(PROJECT_ROOT)
-    search_rerank_metadata_path: Path = _discover_search_rerank_metadata_path(PROJECT_ROOT)
     raw_ste_catalog_path: Path = PROJECT_ROOT / "СТЕ_20260403.csv"
     redis_url: Optional[str] = "memory://"
     semantic_backend: str = "auto"
@@ -81,12 +57,6 @@ class AppSettings:
             fasttext_model_path=Path(os.getenv("TENDERHACK_FASTTEXT_MODEL_PATH", cls.fasttext_model_path)),
             personalization_model_path=Path(
                 os.getenv("TENDERHACK_PERSONALIZATION_MODEL_PATH", cls.personalization_model_path)
-            ),
-            search_rerank_model_path=Path(
-                os.getenv("TENDERHACK_SEARCH_RERANK_MODEL_PATH", cls.search_rerank_model_path)
-            ),
-            search_rerank_metadata_path=Path(
-                os.getenv("TENDERHACK_SEARCH_RERANK_METADATA_PATH", cls.search_rerank_metadata_path)
             ),
             raw_ste_catalog_path=Path(os.getenv("TENDERHACK_RAW_STE_CATALOG_PATH", cls.raw_ste_catalog_path)),
             redis_url=os.getenv("TENDERHACK_REDIS_URL") or cls.redis_url,
@@ -198,7 +168,7 @@ class EventResponsePayload(BaseModel):
 
 class TenderHackApiService:
     LOGIN_CACHE_VERSION = 6
-    SEARCH_CACHE_VERSION = 7
+    SEARCH_CACHE_VERSION = 8
     SUGGESTIONS_CACHE_VERSION = 15
 
     def __init__(self, settings: AppSettings) -> None:
@@ -223,15 +193,14 @@ class TenderHackApiService:
             cache_service=self.cache_service,
             base_profile_ttl_seconds=settings.user_profile_cache_ttl_seconds,
         )
-        self.search_rerank_predictor = SearchRerankPredictor(
-            model_path=settings.search_rerank_model_path,
-            metadata_path=settings.search_rerank_metadata_path,
-        )
         self.offer_lookup_service = OfferLookupService(
             db_path=settings.preprocessed_db_path,
             cache_service=self.cache_service,
             lookup_ttl_seconds=settings.offer_lookup_cache_ttl_seconds,
         )
+        self.skip_storage = InMemorySkipStorage()
+        self.interaction_tracker = InteractionTracker(self.skip_storage)
+        self.ranking_modifier = RankingModifier(self.skip_storage)
 
     def close(self) -> None:
         self.search_service.close()
@@ -330,6 +299,7 @@ class TenderHackApiService:
     def search(self, payload: SearchRequest) -> SearchResponsePayload:
         page_limit = int(payload.limit or payload.topK)
         user_context = payload.userContext or SearchUserContext()
+        resolved_user_id = user_context.id or (f"user-{user_context.inn}" if user_context.inn else "anonymous")
         normalized_query = normalize_text(payload.query)
         short_personalized_prefix = bool(
             user_context.inn
@@ -381,12 +351,6 @@ class TenderHackApiService:
             candidate_limit=max(raw_limit * 4, 250),
         )
         results = list(raw_payload["results"])
-        if self.search_rerank_predictor.enabled:
-            results = self.search_rerank_predictor.rerank_candidates(
-                query=payload.query,
-                query_meta=dict(raw_payload["query"]),
-                candidates=results,
-            )
 
         if user_context.inn or user_context.region or session_categories:
             personalization_query = (
@@ -397,7 +361,7 @@ class TenderHackApiService:
             results = self.personalization_runtime_service.rerank_candidates(
                 query=str(personalization_query),
                 candidates=results,
-                user_id=user_context.id or (f"user-{user_context.inn}" if user_context.inn else "anonymous"),
+                user_id=resolved_user_id,
                 customer_inn=user_context.inn,
                 customer_region=user_context.region,
                 session_categories=session_categories,
@@ -419,6 +383,11 @@ class TenderHackApiService:
             if category_norm and category_norm in bounced_categories:
                 item["final_score"] = round(float(item.get("final_score", item.get("search_score", 0.0))) - 100.0, 4)
                 item["reason_to_hide"] = "Категория пессимизирована после быстрого отказа"
+
+        results = self.ranking_modifier.apply_penalties(
+            recommendations=results,
+            user_id=resolved_user_id,
+        )
 
         results.sort(
             key=lambda item: (
@@ -490,6 +459,12 @@ class TenderHackApiService:
 
     def record_event(self, payload: EventRequest) -> EventResponsePayload:
         resolved_user_id = payload.userId or (f"user-{payload.inn}" if payload.inn else "anonymous")
+        if payload.eventType == "item_close" and payload.category:
+            self.interaction_tracker.register_view(
+                user_id=resolved_user_id,
+                category_id=str(payload.category),
+                dwell_time_ms=payload.durationMs or 0,
+            )
         session_state = self.online_state_service.record_event(
             user_id=resolved_user_id,
             customer_inn=payload.inn,

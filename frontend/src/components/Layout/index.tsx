@@ -1,13 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useStore } from '../../store/store';
-import { User as UserIcon, LogOut, ChevronDown } from 'lucide-react';
+import { User as UserIcon, LogOut, ChevronDown, ShoppingCart } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import Cart from '../Cart';
 import portalSuppliersLogo from '../../assets/portal-suppliers-logo.jpeg';
 
 const Layout = ({ children }: { children: React.ReactNode }) => {
-    const { user, logout } = useStore();
+    const { user, logout, cartProducts } = useStore();
     const navigate = useNavigate();
     const [isProfileOpen, setIsProfileOpen] = useState(false);
+    const [isCartOpen, setIsCartOpen] = useState(false);
     const profileRef = useRef<HTMLDivElement | null>(null);
 
     const handleLogout = () => {
@@ -107,6 +109,20 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
                                     )}
                                 </div>
 
+                                <button
+                                    type="button"
+                                    onClick={() => setIsCartOpen(true)}
+                                    className="relative p-2 text-gray-600 hover:text-[#da291c] transition-colors"
+                                    title="Корзина"
+                                >
+                                    <ShoppingCart size={24} />
+                                    {cartProducts.length > 0 && (
+                                        <span className="absolute -top-1 -right-1 bg-[#da291c] text-white text-[10px] font-bold w-5 h-5 flex items-center justify-center rounded-full border-2 border-white shadow-sm">
+                                            {cartProducts.length}
+                                        </span>
+                                    )}
+                                </button>
+
                                 <button 
                                     onClick={handleLogout}
                                     className="text-gray-500 hover:text-[#d63d2b] transition-colors"
@@ -117,6 +133,19 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
                             </div>
                         ) : (
                             <div className="flex items-center gap-8">
+                                <button
+                                    type="button"
+                                    onClick={() => setIsCartOpen(true)}
+                                    className="relative p-2 text-gray-600 hover:text-[#da291c] transition-colors"
+                                    title="Корзина"
+                                >
+                                    <ShoppingCart size={24} />
+                                    {cartProducts.length > 0 && (
+                                        <span className="absolute -top-1 -right-1 bg-[#da291c] text-white text-[10px] font-bold w-5 h-5 flex items-center justify-center rounded-full border-2 border-white shadow-sm">
+                                            {cartProducts.length}
+                                        </span>
+                                    )}
+                                </button>
                                 <button
                                     type="button"
                                     onClick={() => navigate('/login')}
@@ -136,6 +165,8 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
                     </div>
                 </div>
             </header>
+
+            <Cart isOpen={isCartOpen} onClose={() => setIsCartOpen(false)} />
             
             <main className="flex-grow w-full relative">
                 {children}
