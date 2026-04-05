@@ -20,7 +20,17 @@ from .text import (
 
 
 DEFAULT_SEARCH_DB = Path("data/processed/tenderhack_search.sqlite")
-DEFAULT_SYNONYMS_PATH = Path("data/reference/search_synonyms.json")
+
+
+def _default_synonyms_path() -> Path:
+    project_root = Path(__file__).resolve().parents[2]
+    local_path = project_root / "search_synonyms.json"
+    if local_path.exists():
+        return local_path
+    return project_root / "data" / "reference" / "search_synonyms.json"
+
+
+DEFAULT_SYNONYMS_PATH = _default_synonyms_path()
 
 
 def _token_sequence_contains(tokens: List[str], phrase_tokens: List[str]) -> bool:

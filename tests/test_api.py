@@ -929,6 +929,31 @@ class ApiTests(unittest.TestCase):
         self.assertIn("доска магнитно маркерная настенная", suggestion_texts)
         self.assertNotIn("доска магнитно", suggestion_texts)
 
+    def test_dedupe_suggestions_collapses_reordered_query_phrase(self) -> None:
+        service = self.client.app.state.service
+        suggestions = [
+            service._build_suggestion(
+                text="колбаса сервелат варено копченая",
+                suggestion_type="query",
+                reason="Продолжение запроса",
+                score=120.0,
+            ),
+            service._build_suggestion(
+                text="колбаса варено копченая сервелат",
+                suggestion_type="query",
+                reason="Продолжение запроса",
+                score=120.0,
+            ),
+        ]
+
+        deduped = service._dedupe_suggestions(
+            suggestions,
+            query="колбаса сервелат варено копченая",
+        )
+
+        self.assertEqual(len(deduped), 1)
+        self.assertEqual(deduped[0].text.lower(), "колбаса сервелат варено копченая")
+
 
 if __name__ == "__main__":
     unittest.main()

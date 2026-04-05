@@ -51,11 +51,18 @@ def _env_bool(name: str, default: bool) -> bool:
     return value.strip().lower() not in {"0", "false", "no", "off"}
 
 
+def _default_synonyms_path() -> Path:
+    local_path = PROJECT_ROOT / "search_synonyms.json"
+    if local_path.exists():
+        return local_path
+    return PROJECT_ROOT / "data" / "reference" / "search_synonyms.json"
+
+
 @dataclass
 class AppSettings:
     search_db_path: Path = PROJECT_ROOT / "data" / "processed" / "tenderhack_search.sqlite"
     preprocessed_db_path: Path = PROJECT_ROOT / "data" / "processed" / "tenderhack_preprocessed.sqlite"
-    synonyms_path: Path = PROJECT_ROOT / "data" / "reference" / "search_synonyms.json"
+    synonyms_path: Path = _default_synonyms_path()
     fasttext_model_path: Path = PROJECT_ROOT / "data" / "processed" / "tenderhack_fasttext.bin"
     personalization_model_path: Path = PROJECT_ROOT / "artifacts" / "personalization_model.cbm"
     search_rerank_enabled: bool = True
@@ -610,7 +617,7 @@ class TenderHackApiService:
         suggestion_groups = [product_suggestions, same_type_prefix_suggestions]
         if not (short_personalized_prefix and same_type_prefix_suggestions):
             suggestion_groups.append(category_suggestions)
-        suggestions = self._merge_suggestion_groups(*suggestion_groups)
+        suggestions = self._merge_suggestion_groups(*suggestion_groups, query=query)
         if corrected_query and corrected_query != normalized_query:
             suggestions.append(
                 self._build_suggestion(
@@ -628,11 +635,11 @@ class TenderHackApiService:
         if short_personalized_prefix and same_type_prefix_suggestions:
             abstract_suggestions = []
         if suggestions:
-            remaining_slots = max(0, top_k - len(self._dedupe_suggestions(suggestions)))
+            remaining_slots = max(0, top_k - len(self._dedupe_suggestions(suggestions, query=query)))
             suggestions.extend(abstract_suggestions[: min(2, remaining_slots)])
         else:
             suggestions.extend(abstract_suggestions)
-        result = self._dedupe_suggestions(suggestions)[:top_k]
+        result = self._dedupe_suggestions(suggestions, query=query)[:top_k]
         self.cache_service.set_json(
             cache_key,
             [self._model_dump(item) for item in result],
@@ -899,7 +906,7 @@ class TenderHackApiService:
             key=lambda item: (item.score, -len(item.text), item.text),
             reverse=True,
         )
-        return cls._dedupe_suggestions(ranked_suggestions)
+        return cls._dedupe_suggestions(ranked_suggestions, query=query)
 
     def _resolve_suggestion_categories(
         self,
@@ -1344,7 +1351,7 @@ class TenderHackApiService:
         return cls._dedupe_suggestions(ranked_candidates)
 
     @staticmethod
-    def _merge_suggestion_groups(*groups: List[SuggestionPayload]) -> List[SuggestionPayload]:
+    def _merge_suggestion_groups(*groups: List[SuggestionPayload], query: str = "") -> List[SuggestionPayload]:
         merged: List[SuggestionPayload] = []
         if not groups:
             return merged
@@ -1354,13 +1361,25 @@ class TenderHackApiService:
             for group in groups:
                 if index < len(group):
                     merged.append(group[index])
-        return TenderHackApiService._dedupe_suggestions(merged)
+        return TenderHackApiService._dedupe_suggestions(merged, query=query)
 
     @classmethod
-    def _suggestion_dedupe_key(cls, text: str) -> str:
-        normalized_text = normalize_text(text)
+    def _suggestion_dedupe_key(
+        cls,
+        suggestion: SuggestionPayload,
+        *,
+        query: str = "",
+    ) -> str:
+        normalized_text = normalize_text(suggestion.text)
         if not normalized_text:
             return ""
+
+        if suggestion.type in {"query", "correction"}:
+            significant_stems = sorted({stem_token(token) for token in cls._significant_tokens(normalized_text) if stem_token(token)})
+            if len(significant_stems) >= 3:
+                query_stems = {stem_token(token) for token in cls._significant_tokens(query) if stem_token(token)}
+                if not query_stems or len(query_stems & set(significant_stems)) >= min(2, len(query_stems)):
+                    return f"phrase:{' '.join(significant_stems)}"
 
         stemmed_tokens = stem_tokens(tokenize(normalized_text))
         if stemmed_tokens:
@@ -1368,7 +1387,49 @@ class TenderHackApiService:
         return normalized_text
 
     @classmethod
-    def _is_better_suggestion(cls, candidate: SuggestionPayload, current: SuggestionPayload) -> bool:
+    def _query_alignment_score(cls, suggestion_text: str, query: str) -> tuple[float, int, int]:
+        normalized_query = normalize_text(query)
+        normalized_suggestion = normalize_text(suggestion_text)
+        if not normalized_query or not normalized_suggestion:
+            return (0.0, 0, 0)
+
+        if normalized_suggestion == normalized_query:
+            return (1000.0, 0, 0)
+        if normalized_suggestion.startswith(normalized_query):
+            return (500.0, 0, 0)
+
+        query_tokens = [stem_token(token) for token in cls._significant_tokens(normalized_query) if stem_token(token)]
+        suggestion_tokens = [stem_token(token) for token in cls._significant_tokens(normalized_suggestion) if stem_token(token)]
+        if not query_tokens or not suggestion_tokens:
+            return (0.0, 0, 0)
+
+        prefix_matches = 0
+        for left, right in zip(query_tokens, suggestion_tokens):
+            if left != right:
+                break
+            prefix_matches += 1
+
+        ordered_matches = 0
+        suggestion_index = 0
+        for query_token in query_tokens:
+            while suggestion_index < len(suggestion_tokens) and suggestion_tokens[suggestion_index] != query_token:
+                suggestion_index += 1
+            if suggestion_index >= len(suggestion_tokens):
+                break
+            ordered_matches += 1
+            suggestion_index += 1
+
+        score = 25.0 * prefix_matches + 5.0 * ordered_matches
+        return (score, prefix_matches, ordered_matches)
+
+    @classmethod
+    def _is_better_suggestion(
+        cls,
+        candidate: SuggestionPayload,
+        current: SuggestionPayload,
+        *,
+        query: str = "",
+    ) -> bool:
         if candidate.score != current.score:
             return candidate.score > current.score
 
@@ -1377,6 +1438,11 @@ class TenderHackApiService:
         if candidate_type_rank != current_type_rank:
             return candidate_type_rank > current_type_rank
 
+        candidate_alignment = cls._query_alignment_score(candidate.text, query)
+        current_alignment = cls._query_alignment_score(current.text, query)
+        if candidate_alignment != current_alignment:
+            return candidate_alignment > current_alignment
+
         candidate_text = normalize_text(candidate.text)
         current_text = normalize_text(current.text)
         if len(candidate_text) != len(current_text):
@@ -1384,18 +1450,23 @@ class TenderHackApiService:
         return candidate_text < current_text
 
     @classmethod
-    def _dedupe_suggestions(cls, suggestions: List[SuggestionPayload]) -> List[SuggestionPayload]:
+    def _dedupe_suggestions(
+        cls,
+        suggestions: List[SuggestionPayload],
+        *,
+        query: str = "",
+    ) -> List[SuggestionPayload]:
         deduped_by_key: dict[str, SuggestionPayload] = {}
         order: List[str] = []
         for item in suggestions:
-            dedupe_key = cls._suggestion_dedupe_key(item.text)
+            dedupe_key = cls._suggestion_dedupe_key(item, query=query)
             if not dedupe_key:
                 continue
             if dedupe_key not in deduped_by_key:
                 deduped_by_key[dedupe_key] = item
                 order.append(dedupe_key)
                 continue
-            if cls._is_better_suggestion(item, deduped_by_key[dedupe_key]):
+            if cls._is_better_suggestion(item, deduped_by_key[dedupe_key], query=query):
                 deduped_by_key[dedupe_key] = item
         return [deduped_by_key[key] for key in order]
 
