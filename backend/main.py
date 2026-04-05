@@ -31,6 +31,7 @@ from tenderhack.personalization_runtime import PersonalizationRuntimeService
 from tenderhack.search import SearchService
 from tenderhack.search_rerank_model import SearchRerankPredictor
 from tenderhack.text import normalize_text, stem_token, stem_tokens, tokenize, unique_preserve_order
+from tenderhack.user_profile_scorer import SQLiteUserHistoryRepository, UserProfileScorer, apply_personalization
 
 
 def _env_path(name: str, default: Path) -> Path:
@@ -198,9 +199,13 @@ class EventResponsePayload(BaseModel):
 
 
 class TenderHackApiService:
-    LOGIN_CACHE_VERSION = 6
+    LOGIN_CACHE_VERSION = 7
     SEARCH_CACHE_VERSION = 9
-    SUGGESTIONS_CACHE_VERSION = 16
+    SUGGESTIONS_CACHE_VERSION = 23
+    PROFILE_TOP_CATEGORIES_LIMIT = 6
+    PROFILE_FREQUENT_PRODUCTS_LIMIT = 18
+    MAX_HISTORY_CATEGORY_SUGGESTIONS = 1
+    MAX_HISTORY_REASON_SUGGESTIONS = 3
     _SUGGESTION_TYPE_PRIORITY = {
         "correction": 4,
         "product": 3,
@@ -224,6 +229,7 @@ class TenderHackApiService:
             fasttext_model_path=settings.fasttext_model_path,
         )
         self.personalization_service = PersonalizationService(db_path=settings.preprocessed_db_path)
+        self.user_profile_scorer = UserProfileScorer(SQLiteUserHistoryRepository(self.personalization_service.conn))
         self.personalization_runtime_service = PersonalizationRuntimeService(
             db_path=settings.preprocessed_db_path,
             model_path=settings.personalization_model_path,
@@ -278,12 +284,21 @@ class TenderHackApiService:
         if isinstance(cached_payload, dict):
             return UserPayload(**cached_payload)
 
-        profile = self.personalization_service.build_customer_profile(customer_inn=inn)
+        profile = self.personalization_service.build_customer_profile(
+            customer_inn=inn,
+            top_ste=self.PROFILE_FREQUENT_PRODUCTS_LIMIT,
+        )
         recommended_categories = list(profile.get("recommended_categories") or profile.get("top_categories") or [])
         recommended_ste = list(profile.get("recommended_ste") or profile.get("top_ste") or [])
-        viewed_categories = [str(item.get("category") or "") for item in recommended_categories[:5] if item.get("category")]
+        viewed_categories = [
+            str(item.get("category") or "")
+            for item in recommended_categories[:5]
+            if item.get("category")
+        ]
         region = str(profile.get("customer_region") or "")
-        frequent_products = self._load_frequent_products(recommended_ste[:6])
+        frequent_products = self._load_frequent_products(
+            recommended_ste[: self.PROFILE_FREQUENT_PRODUCTS_LIMIT]
+        )
         payload = UserPayload(
             id=f"user-{inn}",
             inn=inn,
@@ -297,7 +312,7 @@ class TenderHackApiService:
                     "reason": str(item.get("reason") or "Часто закупалось учреждением"),
                     "recommendationScore": round(float(item.get("recommendation_score") or item.get("weight") or 0.0), 4),
                 }
-                for item in recommended_categories[:6]
+                for item in recommended_categories[: self.PROFILE_TOP_CATEGORIES_LIMIT]
             ],
             frequentProducts=frequent_products,
         )
@@ -558,7 +573,7 @@ class TenderHackApiService:
     def suggestions(
         self,
         query: str,
-        top_k: int = 5,
+        top_k: int = 8,
         user_inn: Optional[str] = None,
         viewed_categories: Optional[List[str]] = None,
         top_categories: Optional[List[str]] = None,
@@ -592,13 +607,21 @@ class TenderHackApiService:
             and len(tokenize(normalized_query or query)) == 1
             and 2 <= len(normalize_text(normalized_query or query)) <= 4
         )
+        user_weights = self._resolve_suggestion_user_weights(user_inn=user_inn)
+        user_ste_weights = self._resolve_suggestion_user_ste_weights(user_inn=user_inn)
         same_type_prefix_suggestions = self._build_personalized_product_suggestions(
             query=query,
             products=self._resolve_same_type_prefix_products(user_inn=user_inn, query=query),
+            user_weights=user_weights,
+            user_item_weights=user_ste_weights,
+            require_positive_boost=False,
         )
         product_suggestions = self._build_personalized_product_suggestions(
             query=query,
             products=self._resolve_suggestion_products(user_inn=user_inn),
+            user_weights=user_weights,
+            user_item_weights=user_ste_weights,
+            require_positive_boost=True,
         )
         if short_personalized_prefix and same_type_prefix_suggestions:
             product_suggestions = [
@@ -613,6 +636,8 @@ class TenderHackApiService:
                 viewed_categories=viewed_categories or [],
                 top_categories=top_categories or [],
             ),
+            user_weights=user_weights,
+            require_positive_boost=True,
         )
         suggestion_groups = [product_suggestions, same_type_prefix_suggestions]
         if not (short_personalized_prefix and same_type_prefix_suggestions):
@@ -627,18 +652,32 @@ class TenderHackApiService:
                     score=180.0,
                 )
             )
+        completion_suggestions = self._build_completion_suggestions(
+            query=query,
+            query_payload=query_payload,
+        )
         abstract_suggestions = self._build_abstract_suggestions(
             query=query,
             query_payload=query_payload,
             results=payload["results"],
         )
+        abstract_suggestions = self._diversify_suggestions_by_family(
+            self._merge_suggestion_groups(completion_suggestions, abstract_suggestions, query=query)
+        )
         if short_personalized_prefix and same_type_prefix_suggestions:
             abstract_suggestions = []
-        if suggestions:
-            remaining_slots = max(0, top_k - len(self._dedupe_suggestions(suggestions, query=query)))
-            suggestions.extend(abstract_suggestions[: min(2, remaining_slots)])
+        primary_suggestions = self._dedupe_suggestions(suggestions, query=query)
+        diversified_primary_suggestions, history_overflow_suggestions = self._partition_suggestions_by_history_limit(
+            primary_suggestions,
+            top_k=top_k,
+        )
+        if diversified_primary_suggestions:
+            remaining_slots = max(0, top_k - len(diversified_primary_suggestions))
+            suggestions = list(diversified_primary_suggestions)
+            suggestions.extend(abstract_suggestions[:remaining_slots])
+            suggestions.extend(history_overflow_suggestions)
         else:
-            suggestions.extend(abstract_suggestions)
+            suggestions = list(abstract_suggestions)
         result = self._dedupe_suggestions(suggestions, query=query)[:top_k]
         self.cache_service.set_json(
             cache_key,
@@ -705,9 +744,64 @@ class TenderHackApiService:
         return trimmed
 
     @staticmethod
-    def _abstract_name_phrase(name: str, query: str) -> str:
+    def _suggestion_name_source(name: str) -> str:
+        raw_name = str(name).strip()
+        if not raw_name:
+            return ""
+        compact_source = re.split(r"[,;()]", raw_name, maxsplit=1)[0].strip()
+        return compact_source or raw_name
+
+    @classmethod
+    def _trim_verbose_product_phrase_tokens(cls, tokens: List[str]) -> List[str]:
+        if not tokens:
+            return []
+
+        clause_stop_tokens = {"при", "за", "вследствие"}
+        detail_stop_tokens = {
+            "рядовой",
+            "карьерный",
+            "фракция",
+            "фракции",
+            "типоразмер",
+            "типоразмера",
+            "марка",
+            "сорт",
+            "класс",
+            "зернистость",
+            "гранулометрия",
+            "диаметр",
+            "толщина",
+            "длина",
+            "ширина",
+            "высота",
+            "масса",
+            "вес",
+            "объем",
+            "объём",
+            "серия",
+            "модель",
+            "артикул",
+            "комплектность",
+        }
+        secondary_clause_tokens = {"с", "со", "без"}
+
+        compact_tokens: List[str] = []
+        for token in tokens:
+            if compact_tokens:
+                if token in clause_stop_tokens and len(compact_tokens) >= 2:
+                    break
+                if token in secondary_clause_tokens and len(compact_tokens) >= 2:
+                    break
+                if token in detail_stop_tokens and len(compact_tokens) >= 2:
+                    break
+            compact_tokens.append(token)
+
+        return cls._trim_trailing_connector_tokens(compact_tokens)
+
+    @classmethod
+    def _abstract_name_phrase(cls, name: str, query: str) -> str:
         query_tokens = tokenize(query)
-        name_tokens = tokenize(name)
+        name_tokens = tokenize(cls._suggestion_name_source(name))
         if not name_tokens:
             return ""
 
@@ -716,7 +810,7 @@ class TenderHackApiService:
             if token.isdigit() or any(char.isdigit() for char in token):
                 break
             phrase_tokens.append(token)
-        phrase_tokens = TenderHackApiService._trim_trailing_connector_tokens(phrase_tokens)
+        phrase_tokens = cls._trim_verbose_product_phrase_tokens(phrase_tokens)
         min_tokens = 1 if len(query_tokens) <= 1 else 2
         if len(phrase_tokens) < min_tokens:
             return ""
@@ -786,7 +880,7 @@ class TenderHackApiService:
 
     @classmethod
     def _product_suggestion_phrase(cls, name: str) -> str:
-        tokens = tokenize(name)
+        tokens = tokenize(cls._suggestion_name_source(name))
         if not tokens:
             return ""
 
@@ -837,7 +931,7 @@ class TenderHackApiService:
                 continue
             phrase_tokens.append(token)
 
-        phrase_tokens = cls._trim_trailing_connector_tokens(phrase_tokens)
+        phrase_tokens = cls._trim_verbose_product_phrase_tokens(phrase_tokens)
         phrase = " ".join(phrase_tokens)
         if not phrase:
             return ""
@@ -908,6 +1002,125 @@ class TenderHackApiService:
         )
         return cls._dedupe_suggestions(ranked_suggestions, query=query)
 
+    def _build_completion_suggestions(
+        self,
+        *,
+        query: str,
+        query_payload: dict,
+    ) -> List[SuggestionPayload]:
+        query_norm = normalize_text(query)
+        if len(query_norm) <= 2:
+            return []
+
+        completion_tokens = unique_preserve_order(
+            [
+                normalize_text(str(token))
+                for token in query_payload.get("completion_expansions", [])
+                if token
+            ]
+        )
+        if not completion_tokens:
+            return []
+
+        ranked_suggestions: List[SuggestionPayload] = []
+        seen_texts: set[str] = set()
+
+        for candidate_norm in completion_tokens[:8]:
+            if not candidate_norm or candidate_norm == query_norm or not candidate_norm.startswith(query_norm):
+                continue
+
+            rows = self.search_service.conn.execute(
+                """
+                SELECT clean_name, normalized_name, category, normalized_category
+                FROM ste_catalog
+                WHERE normalized_name LIKE ?
+                   OR normalized_category LIKE ?
+                ORDER BY
+                    CASE
+                        WHEN normalized_name = ? THEN 0
+                        WHEN normalized_category = ? THEN 1
+                        ELSE 2
+                    END,
+                    length(normalized_name) ASC,
+                    length(normalized_category) ASC,
+                    normalized_name ASC,
+                    normalized_category ASC
+                LIMIT 12
+                """,
+                (f"{candidate_norm}%", f"{candidate_norm}%", candidate_norm, candidate_norm),
+            ).fetchall()
+            if not rows:
+                continue
+
+            distinct_categories = {
+                normalize_text(str(row["normalized_category"] or row["category"] or ""))
+                for row in rows
+                if str(row["normalized_category"] or row["category"] or "").strip()
+            }
+            support_score = min(14.0, 3.0 * math.log1p(len(rows)) + 1.5 * len(distinct_categories))
+
+            query_text = ""
+            for row in rows:
+                clean_name = str(row["clean_name"] or "").strip()
+                if not clean_name:
+                    continue
+                normalized_name = normalize_text(str(row["normalized_name"] or clean_name))
+                phrase = self._product_suggestion_phrase(clean_name) or self._abstract_name_phrase(clean_name, query)
+                if normalize_text(phrase) == candidate_norm or normalized_name == candidate_norm:
+                    query_text = phrase or clean_name
+                    break
+            normalized_query_text = normalize_text(query_text)
+            if normalized_query_text and normalized_query_text not in seen_texts and normalized_query_text != query_norm:
+                seen_texts.add(normalized_query_text)
+                ranked_suggestions.append(
+                    self._build_suggestion(
+                        text=query_text,
+                        suggestion_type="query",
+                        reason="Популярное продолжение",
+                        score=round(174.0 + support_score, 4),
+                    )
+                )
+
+            category_phrases: List[str] = []
+            seen_categories: set[str] = set()
+            for row in rows:
+                normalized_category = normalize_text(str(row["normalized_category"] or row["category"] or ""))
+                if not normalized_category or not normalized_category.startswith(candidate_norm):
+                    continue
+                category_phrase = self._compact_category_phrase(str(row["category"] or row["normalized_category"] or ""))
+                normalized_phrase = normalize_text(category_phrase)
+                if not normalized_phrase or normalized_phrase in seen_categories:
+                    continue
+                seen_categories.add(normalized_phrase)
+                category_phrases.append(category_phrase)
+                if len(category_phrases) >= 2:
+                    break
+
+            for index, category_phrase in enumerate(category_phrases):
+                normalized_phrase = normalize_text(category_phrase)
+                if normalized_phrase in seen_texts or normalized_phrase == query_norm:
+                    continue
+                seen_texts.add(normalized_phrase)
+                ranked_suggestions.append(
+                    self._build_suggestion(
+                        text=category_phrase,
+                        suggestion_type="category",
+                        reason="Популярная категория",
+                        score=round(168.0 + support_score - index * 4.0, 4),
+                    )
+                )
+
+        ranked_suggestions.sort(
+            key=lambda item: (
+                item.score,
+                self._SUGGESTION_TYPE_PRIORITY.get(item.type, 0),
+                -len(item.text),
+                item.text,
+            ),
+            reverse=True,
+        )
+        return self._dedupe_suggestions(ranked_suggestions, query=query)
+
     def _resolve_suggestion_categories(
         self,
         *,
@@ -960,6 +1173,62 @@ class TenderHackApiService:
             ttl_seconds=self.settings.user_profile_cache_ttl_seconds,
         )
         return frequent_products
+
+    def _resolve_suggestion_user_weights(self, *, user_inn: Optional[str]) -> dict[str, float]:
+        if not user_inn:
+            return {}
+
+        cache_key = self.cache_service.build_key(
+            "suggestion_user_category_weights",
+            data={"version": 2, "inn": user_inn},
+        )
+        cached_payload = self.cache_service.get_json(cache_key)
+        if isinstance(cached_payload, dict):
+            return {
+                str(category_id): float(weight or 0.0)
+                for category_id, weight in cached_payload.items()
+                if category_id
+            }
+
+        try:
+            weights = self.user_profile_scorer.compute_category_weights(user_inn)
+        except Exception:
+            weights = {}
+
+        self.cache_service.set_json(
+            cache_key,
+            weights,
+            ttl_seconds=self.settings.user_profile_cache_ttl_seconds,
+        )
+        return weights
+
+    def _resolve_suggestion_user_ste_weights(self, *, user_inn: Optional[str]) -> dict[str, float]:
+        if not user_inn:
+            return {}
+
+        cache_key = self.cache_service.build_key(
+            "suggestion_user_ste_weights",
+            data={"version": 1, "inn": user_inn},
+        )
+        cached_payload = self.cache_service.get_json(cache_key)
+        if isinstance(cached_payload, dict):
+            return {
+                str(ste_id): float(weight or 0.0)
+                for ste_id, weight in cached_payload.items()
+                if ste_id
+            }
+
+        try:
+            weights = self.user_profile_scorer.compute_ste_weights(user_inn)
+        except Exception:
+            weights = {}
+
+        self.cache_service.set_json(
+            cache_key,
+            weights,
+            ttl_seconds=self.settings.user_profile_cache_ttl_seconds,
+        )
+        return weights
 
     def _resolve_same_type_prefix_products(self, *, user_inn: Optional[str], query: str) -> List[dict]:
         query_norm = normalize_text(query)
@@ -1255,12 +1524,14 @@ class TenderHackApiService:
         *,
         query: str,
         categories: List[str],
+        user_weights: Optional[dict[str, float]] = None,
+        require_positive_boost: bool = False,
     ) -> List[SuggestionPayload]:
         query_norm = normalize_text(query)
         if not query_norm:
             return []
 
-        ranked_candidates: List[SuggestionPayload] = []
+        raw_candidates: List[dict] = []
         for category in categories:
             candidate = cls._compact_category_phrase(str(category))
             candidate_norm = normalize_text(candidate)
@@ -1268,15 +1539,33 @@ class TenderHackApiService:
                 continue
             score = cls._token_prefix_match_score(query, candidate)
             if score > 0:
-                ranked_candidates.append(
-                    cls._build_suggestion(
-                        text=candidate,
-                        suggestion_type="category",
-                        reason="Категория из истории",
-                        score=score + 20.0,
-                    )
+                raw_candidates.append(
+                    {
+                        "text": candidate,
+                        "suggestion_type": "category",
+                        "reason": "Категория из истории",
+                        "category": candidate_norm,
+                        "base_score": score + 20.0,
+                    }
                 )
 
+        personalized_candidates = apply_personalization(raw_candidates, user_weights or {})
+        if require_positive_boost:
+            personalized_candidates = [
+                item
+                for item in personalized_candidates
+                if float(item.get("boost_weight", 0.0) or 0.0) > 0.0
+            ]
+        ranked_candidates = [
+            cls._build_suggestion(
+                text=str(item.get("text") or ""),
+                suggestion_type="category",
+                reason=str(item.get("reason") or "Категория из истории"),
+                score=float(item.get("final_score", item.get("base_score", 0.0)) or 0.0),
+            )
+            for item in personalized_candidates
+            if item.get("text")
+        ]
         ranked_candidates.sort(
             key=lambda item: (item.score, -len(item.text), item.text),
             reverse=True,
@@ -1289,12 +1578,15 @@ class TenderHackApiService:
         *,
         query: str,
         products: List[dict],
+        user_weights: Optional[dict[str, float]] = None,
+        user_item_weights: Optional[dict[str, float]] = None,
+        require_positive_boost: bool = False,
     ) -> List[SuggestionPayload]:
         query_norm = normalize_text(query)
         if not query_norm or not products:
             return []
 
-        ranked_candidates: List[SuggestionPayload] = []
+        raw_candidates: List[dict] = []
 
         for item in products:
             full_name = str(item.get("name") or "").strip()
@@ -1335,15 +1627,42 @@ class TenderHackApiService:
             else:
                 reason = "Часто закупалось"
 
-            ranked_candidates.append(
-                cls._build_suggestion(
-                    text=suggestion_phrase,
-                    suggestion_type="product",
-                    reason=reason,
-                    score=score + 35.0,
-                )
+            raw_candidates.append(
+                {
+                    "ste_id": str(item.get("steId") or item.get("ste_id") or ""),
+                    "text": suggestion_phrase,
+                    "suggestion_type": "product",
+                    "reason": reason,
+                    "category": str(item.get("category") or ""),
+                    "base_score": score + 35.0,
+                }
             )
 
+        personalized_candidates = apply_personalization(
+            raw_candidates,
+            user_weights or {},
+            user_item_weights=user_item_weights or {},
+        )
+        if require_positive_boost:
+            personalized_candidates = [
+                item
+                for item in personalized_candidates
+                if (
+                    float(item.get("item_boost_weight", 0.0) or 0.0) > 0.0
+                    if str(item.get("reason") or "") == "Часто закупалось"
+                    else float(item.get("boost_weight", 0.0) or 0.0) > 0.0
+                )
+            ]
+        ranked_candidates = [
+            cls._build_suggestion(
+                text=str(item.get("text") or ""),
+                suggestion_type="product",
+                reason=str(item.get("reason") or "Часто закупалось"),
+                score=float(item.get("final_score", item.get("base_score", 0.0)) or 0.0),
+            )
+            for item in personalized_candidates
+            if item.get("text")
+        ]
         ranked_candidates.sort(
             key=lambda item: (item.score, -len(item.text), item.text),
             reverse=True,
@@ -1362,6 +1681,106 @@ class TenderHackApiService:
                 if index < len(group):
                     merged.append(group[index])
         return TenderHackApiService._dedupe_suggestions(merged, query=query)
+
+    @classmethod
+    def _suggestion_family_key_from_text(cls, text: str) -> str:
+        significant_stems = [stem_token(token) for token in cls._significant_tokens(text) if stem_token(token)]
+        if significant_stems:
+            return significant_stems[0]
+        return normalize_text(text)
+
+    @classmethod
+    def _diversify_suggestions_by_family(cls, suggestions: List[SuggestionPayload]) -> List[SuggestionPayload]:
+        if len(suggestions) <= 1:
+            return suggestions
+
+        groups: dict[str, List[SuggestionPayload]] = {}
+        family_order: List[str] = []
+        for item in suggestions:
+            family_key = cls._suggestion_family_key_from_text(item.text)
+            if not family_key:
+                family_key = normalize_text(item.text)
+            if family_key not in groups:
+                groups[family_key] = []
+                family_order.append(family_key)
+            groups[family_key].append(item)
+
+        for group in groups.values():
+            group.sort(
+                key=lambda item: (
+                    item.score,
+                    cls._SUGGESTION_TYPE_PRIORITY.get(item.type, 0),
+                    -len(item.text),
+                    item.text,
+                ),
+                reverse=True,
+            )
+
+        diversified: List[SuggestionPayload] = []
+        max_group_len = max((len(group) for group in groups.values()), default=0)
+        for index in range(max_group_len):
+            round_items = [groups[key][index] for key in family_order if index < len(groups[key])]
+            round_items.sort(
+                key=lambda item: (
+                    item.score,
+                    cls._SUGGESTION_TYPE_PRIORITY.get(item.type, 0),
+                    -len(item.text),
+                    item.text,
+                ),
+                reverse=True,
+            )
+            diversified.extend(round_items)
+        return diversified
+
+    @classmethod
+    def _suggestion_history_bucket(cls, suggestion: SuggestionPayload) -> str:
+        reason = str(suggestion.reason or "")
+        if reason == "Категория из истории":
+            return "history_category"
+        if reason == "Часто закупалось":
+            return "history_product"
+        return ""
+
+    @classmethod
+    def _partition_suggestions_by_history_limit(
+        cls,
+        suggestions: List[SuggestionPayload],
+        *,
+        top_k: int,
+    ) -> tuple[List[SuggestionPayload], List[SuggestionPayload]]:
+        if top_k <= 0 or not suggestions:
+            return ([], list(suggestions))
+
+        max_history_categories = min(cls.MAX_HISTORY_CATEGORY_SUGGESTIONS, top_k)
+        max_history_total = min(
+            top_k,
+            max(1, min(cls.MAX_HISTORY_REASON_SUGGESTIONS, math.ceil(top_k * 0.4))),
+        )
+
+        kept: List[SuggestionPayload] = []
+        overflow: List[SuggestionPayload] = []
+        history_category_count = 0
+        history_total_count = 0
+
+        for item in suggestions:
+            history_bucket = cls._suggestion_history_bucket(item)
+            if not history_bucket:
+                kept.append(item)
+                continue
+
+            is_history_category = history_bucket == "history_category"
+            exceeds_category_limit = is_history_category and history_category_count >= max_history_categories
+            exceeds_history_limit = history_total_count >= max_history_total
+            if exceeds_category_limit or exceeds_history_limit:
+                overflow.append(item)
+                continue
+
+            kept.append(item)
+            history_total_count += 1
+            if is_history_category:
+                history_category_count += 1
+
+        return (kept, overflow)
 
     @classmethod
     def _suggestion_dedupe_key(
@@ -1588,7 +2007,7 @@ def create_app(settings: Optional[AppSettings] = None) -> FastAPI:
     async def suggestions(
         request: Request,
         q: str = Query(min_length=1),
-        top_k: int = Query(default=5, ge=1, le=10),
+        top_k: int = Query(default=8, ge=1, le=10),
         inn: Optional[str] = Query(default=None),
         viewed_categories: Optional[str] = Query(default=None),
         top_categories: Optional[str] = Query(default=None),

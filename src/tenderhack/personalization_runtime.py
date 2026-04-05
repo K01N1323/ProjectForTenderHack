@@ -202,9 +202,9 @@ class PersonalizationRuntimeService:
             for key, value in dict(user_profile.get("last_category_purchase_dt", {})).items()
         }
 
-        ste_purchase_count = ste_counts.get(ste_id, 0)
-        if ste_purchase_count > 0:
-            priority += 100.0 + min(20.0, float(ste_purchase_count) * 5.0)
+        ste_repeat_purchase_count = max(0, ste_counts.get(ste_id, 0) - 1)
+        if ste_repeat_purchase_count > 0:
+            priority += 100.0 + min(20.0, float(ste_repeat_purchase_count) * 5.0)
             ste_last_dt = last_ste_purchase_dt.get(ste_id)
             if ste_last_dt is not None:
                 recency_days = max(0, (reference_date - ste_last_dt).days)

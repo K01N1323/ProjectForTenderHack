@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -18,7 +19,7 @@ if str(PROJECT_ROOT) not in sys.path:
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from backend.main import AppSettings, SearchRequest, create_app
+from backend.main import AppSettings, SearchRequest, TenderHackApiService, create_app
 from scripts.build_search_assets import build_search_db
 from tenderhack.personalization_runtime import PersonalizationRuntimeService
 from tenderhack.search import SearchService
@@ -186,6 +187,54 @@ class ApiTests(unittest.TestCase):
                     "доска магнитно маркерная настенная",
                 ]
             )
+            writer.writerow(
+                [
+                    "ste-12",
+                    "Молоток",
+                    "молоток",
+                    "Молотки",
+                    "молотки",
+                    "Вес | Тип",
+                    "2",
+                    "молоток слесарный ручной",
+                ]
+            )
+            writer.writerow(
+                [
+                    "ste-13",
+                    "Молоток отбойный электрический",
+                    "молоток отбойный электрический",
+                    "Молотки отбойные",
+                    "молотки отбойные",
+                    "Мощность | Тип",
+                    "2",
+                    "молоток отбойный электрический",
+                ]
+            )
+            writer.writerow(
+                [
+                    "ste-14",
+                    "Молоко",
+                    "молоко",
+                    "Молоко питьевое",
+                    "молоко питьевое",
+                    "Жирность | Объем",
+                    "2",
+                    "молоко питьевое",
+                ]
+            )
+            writer.writerow(
+                [
+                    "ste-15",
+                    "Молоко сгущенное",
+                    "молоко сгущенное",
+                    "Молоко сгущенное",
+                    "молоко сгущенное",
+                    "Состав | Объем",
+                    "2",
+                    "молоко сгущенное с сахаром",
+                ]
+            )
 
         with cls.raw_catalog_path.open("w", encoding="utf-8", newline="") as handle:
             writer = csv.writer(handle, delimiter=";")
@@ -275,6 +324,38 @@ class ApiTests(unittest.TestCase):
                     "Доска магнитно маркерная настенная",
                     "Доски магнитно маркерные",
                     "Тип:магнитно-маркерная;Размещение:настенная",
+                ]
+            )
+            writer.writerow(
+                [
+                    "ste-12",
+                    "Молоток",
+                    "Молотки",
+                    "Вес:500 г;Тип:слесарный",
+                ]
+            )
+            writer.writerow(
+                [
+                    "ste-13",
+                    "Молоток отбойный электрический",
+                    "Молотки отбойные",
+                    "Мощность:1200 вт;Тип:электрический",
+                ]
+            )
+            writer.writerow(
+                [
+                    "ste-14",
+                    "Молоко",
+                    "Молоко питьевое",
+                    "Жирность:3.2 процента;Объем:1 л",
+                ]
+            )
+            writer.writerow(
+                [
+                    "ste-15",
+                    "Молоко сгущенное",
+                    "Молоко сгущенное",
+                    "Состав:с сахаром;Объем:380 г",
                 ]
             )
 
@@ -380,6 +461,10 @@ class ApiTests(unittest.TestCase):
                 """,
                 [
                     ("7701234567", 1, 5, 1500.0, "2024-01-01", "2025-01-10"),
+                    ("7702155262", 1, 24, 7200.0, "2024-01-01", "2025-01-10"),
+                    ("7702155262", 2, 1, 550.0, "2024-01-01", "2024-03-10"),
+                    ("7702155262", 4, 1, 790.0, "2024-01-01", "2024-04-10"),
+                    ("7702155262", 6, 1, 120.0, "2024-01-01", "2024-05-10"),
                     ("7707654321", 3, 12, 4200.0, "2024-01-01", "2025-01-10"),
                     ("7707654322", 5, 18, 18000.0, "2024-01-01", "2025-01-10"),
                     ("7707654322", 3, 6, 2400.0, "2024-01-01", "2025-01-10"),
@@ -395,6 +480,11 @@ class ApiTests(unittest.TestCase):
                 [
                     ("7701234567", "ste-1", 1, 4, 900.0, "2024-01-01", "2025-01-10"),
                     ("7701234567", "ste-3", 3, 1, 110.0, "2024-06-10", "2024-06-10"),
+                    ("7702155262", "ste-1", 1, 20, 4800.0, "2024-01-01", "2025-01-10"),
+                    ("7702155262", "ste-4", 1, 1, 240.0, "2024-02-15", "2024-02-15"),
+                    ("7702155262", "ste-2", 2, 1, 550.0, "2024-03-10", "2024-03-10"),
+                    ("7702155262", "ste-5", 4, 1, 790.0, "2024-04-10", "2024-04-10"),
+                    ("7702155262", "ste-8", 6, 1, 120.0, "2024-05-10", "2024-05-10"),
                     ("7707654321", "ste-3", 3, 7, 980.0, "2024-01-01", "2025-01-10"),
                     ("7707654322", "ste-7", 5, 14, 16500.0, "2024-01-01", "2025-01-10"),
                     ("7707654322", "ste-3", 3, 4, 540.0, "2024-01-01", "2025-01-10"),
@@ -417,6 +507,7 @@ class ApiTests(unittest.TestCase):
                 "INSERT INTO customer_region_lookup (customer_inn, customer_region, frequency) VALUES (?, ?, ?)",
                 [
                     ("7701234567", "Москва", 6),
+                    ("7702155262", "Москва", 8),
                     ("7707654321", "Москва", 5),
                     ("7707654322", "Москва", 5),
                 ],
@@ -625,6 +716,63 @@ class ApiTests(unittest.TestCase):
         finally:
             runtime_service.close()
 
+    def test_runtime_drops_exact_item_boost_for_one_off_purchase(self) -> None:
+        runtime_service = PersonalizationRuntimeService(db_path=self.preprocessed_db_path)
+        try:
+            reranked = runtime_service.rerank_candidates(
+                query="ручка",
+                candidates=[
+                    {
+                        "ste_id": "ste-4",
+                        "clean_name": "Ручка офисная красная",
+                        "normalized_name": "ручка офисная красная",
+                        "category": "Ручки канцелярские",
+                        "normalized_category": "ручки канцелярские",
+                        "search_score": 12.0,
+                        "search_features": {
+                            "exact_phrase": 0.0,
+                            "full_name_cover": 0.0,
+                            "full_category_cover": 1.0,
+                            "corrected_token_overlap": 1.0,
+                            "name_stem_overlap": 1.0,
+                            "category_stem_overlap": 1.0,
+                            "semantic_name_overlap": 0.2,
+                            "semantic_category_overlap": 0.2,
+                            "semantic_vector_similarity": 0.5,
+                        },
+                    },
+                    {
+                        "ste_id": "ste-1",
+                        "clean_name": "Ручка канцелярская синяя",
+                        "normalized_name": "ручка канцелярская синяя",
+                        "category": "Ручки канцелярские",
+                        "normalized_category": "ручки канцелярские",
+                        "search_score": 10.0,
+                        "search_features": {
+                            "exact_phrase": 0.0,
+                            "full_name_cover": 0.0,
+                            "full_category_cover": 1.0,
+                            "corrected_token_overlap": 1.0,
+                            "name_stem_overlap": 1.0,
+                            "category_stem_overlap": 1.0,
+                            "semantic_name_overlap": 0.3,
+                            "semantic_category_overlap": 0.2,
+                            "semantic_vector_similarity": 0.55,
+                        },
+                    },
+                ],
+                user_id="user-7702155262",
+                customer_inn="7702155262",
+                customer_region="Москва",
+                session_categories=["Ручки канцелярские"],
+            )
+            self.assertEqual(reranked[0]["ste_id"], "ste-1")
+            by_id = {item["ste_id"]: item for item in reranked}
+            self.assertGreater(by_id["ste-1"]["history_priority"], by_id["ste-4"]["history_priority"])
+            self.assertLess(by_id["ste-4"]["history_priority"], 60.0)
+        finally:
+            runtime_service.close()
+
     def test_search_returns_personalized_product_shape(self) -> None:
         request_payload = {
             "query": "канцелярские ручки",
@@ -806,7 +954,7 @@ class ApiTests(unittest.TestCase):
         response = self.client.get(
             "/api/search/suggestions",
             params={
-                "q": "руч",
+                "q": "ручка",
                 "inn": "7701234567",
                 "top_categories": "Ручки канцелярские|Бумага офисная",
                 "viewed_categories": "Ручки канцелярские",
@@ -823,7 +971,79 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(payload[1]["type"], "category")
         self.assertIn("ручки канцелярские", suggestion_texts)
 
-    def test_suggestions_include_personalized_products_by_prefix(self) -> None:
+    def test_personalized_product_suggestions_drop_one_off_items_inside_core_category(self) -> None:
+        suggestions = TenderHackApiService._build_personalized_product_suggestions(
+            query="руч",
+            products=[
+                {
+                    "steId": "ste-1",
+                    "name": "Ручка канцелярская синяя",
+                    "category": "Ручки канцелярские",
+                    "purchaseCount": 20,
+                    "reason": "Часто закупалось учреждением",
+                    "recommendationScore": 6.0,
+                },
+                {
+                    "steId": "ste-4",
+                    "name": "Ручка офисная красная",
+                    "category": "Ручки канцелярские",
+                    "purchaseCount": 1,
+                    "reason": "Часто закупалось учреждением",
+                    "recommendationScore": 5.0,
+                },
+            ],
+            user_weights={"ручки канцелярские": 2.0},
+            user_item_weights={"ste-1": 1.5, "ste-4": 0.0},
+            require_positive_boost=True,
+        )
+
+        suggestion_texts = [item.text for item in suggestions]
+        self.assertIn("Ручка канцелярская синяя", suggestion_texts)
+        self.assertNotIn("Ручка офисная красная", suggestion_texts)
+
+    def test_history_reason_cap_keeps_room_for_non_history_suggestions(self) -> None:
+        suggestions = [
+            TenderHackApiService._build_suggestion(
+                text="бумага для офисной техники",
+                suggestion_type="category",
+                reason="Категория из истории",
+                score=210.0,
+            ),
+            TenderHackApiService._build_suggestion(
+                text="зажимы для бумаг",
+                suggestion_type="category",
+                reason="Категория из истории",
+                score=180.0,
+            ),
+            TenderHackApiService._build_suggestion(
+                text="марка почтовая",
+                suggestion_type="product",
+                reason="Часто закупалось",
+                score=170.0,
+            ),
+            TenderHackApiService._build_suggestion(
+                text="бумага",
+                suggestion_type="query",
+                reason="Продолжение запроса",
+                score=160.0,
+            ),
+            TenderHackApiService._build_suggestion(
+                text="бумажные блоки",
+                suggestion_type="query",
+                reason="Популярное продолжение",
+                score=150.0,
+            ),
+        ]
+
+        kept, overflow = TenderHackApiService._partition_suggestions_by_history_limit(suggestions, top_k=5)
+        reasons = [item.reason for item in kept]
+
+        self.assertEqual(reasons.count("Категория из истории"), 1)
+        self.assertIn("Продолжение запроса", reasons)
+        self.assertIn("Популярное продолжение", reasons)
+        self.assertEqual(len(overflow), 1)
+
+    def test_suggestions_do_not_personalize_one_off_products_by_prefix(self) -> None:
         response = self.client.get(
             "/api/search/suggestions",
             params={
@@ -834,8 +1054,9 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertTrue(payload)
-        self.assertEqual(payload[0]["text"], "Парацетамол")
-        self.assertEqual(payload[0]["type"], "product")
+        self.assertEqual(payload[0]["text"], "парацетамол таблетки")
+        self.assertEqual(payload[0]["type"], "query")
+        self.assertIn("Парацетамол", self._suggestion_texts(payload))
 
     def test_suggestions_correct_transposed_typo_to_truba(self) -> None:
         response = self.client.get(
@@ -867,6 +1088,22 @@ class ApiTests(unittest.TestCase):
         self.assertNotIn("Альбом для рисования", suggestion_texts)
         albumin_item = next(item for item in payload if item["text"] == "Альбумин человеческий")
         self.assertEqual(albumin_item["reason"], "По типу учреждения")
+
+    def test_suggestions_drop_one_off_history_items_for_single_letter_prefix(self) -> None:
+        response = self.client.get(
+            "/api/search/suggestions",
+            params={
+                "q": "а",
+                "inn": "7707654322",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload)
+        suggestion_texts = self._suggestion_texts(payload)
+        self.assertIn("Альбумин человеческий", suggestion_texts)
+        self.assertNotIn("Альбом для рисования", suggestion_texts)
+        self.assertNotIn("альбомы для рисования", [text.lower() for text in suggestion_texts])
 
     def test_suggestions_trim_trailing_prepositions_from_product_phrases(self) -> None:
         response = self.client.get(
@@ -929,6 +1166,57 @@ class ApiTests(unittest.TestCase):
         self.assertIn("доска магнитно маркерная настенная", suggestion_texts)
         self.assertNotIn("доска магнитно", suggestion_texts)
 
+    def test_product_suggestion_phrase_trims_verbose_specific_tail(self) -> None:
+        service = self.client.app.state.service
+
+        phrase = service._product_suggestion_phrase(
+            "Песок для строительных работ, Рядовой/Карьерный, фракция 2.5 мм",
+        )
+
+        self.assertEqual(phrase, "Песок для строительных работ")
+
+    def test_abstract_name_phrase_trims_verbose_clause_after_head(self) -> None:
+        service = self.client.app.state.service
+
+        phrase = service._abstract_name_phrase(
+            "Строительный контроль за выполнением работ по капитальному ремонту АПС",
+            "стро",
+        )
+
+        self.assertEqual(phrase, "строительный контроль")
+
+    def test_login_returns_extended_frequent_products_batch_for_profile_panel(self) -> None:
+        service = self.client.app.state.service
+        synthetic_profile = {
+            "customer_region": "Москва",
+            "recommended_categories": [
+                {
+                    "category": "Ручки канцелярские",
+                    "purchase_count": 5,
+                    "total_amount": 1500.0,
+                    "reason": "Часто закупалось учреждением",
+                    "recommendation_score": 12.0,
+                }
+            ],
+            "recommended_ste": [
+                {
+                    "ste_id": f"ste-{index}",
+                    "category": "Ручки канцелярские" if index in {1, 4, 11} else "Тестовая категория",
+                    "purchase_count": 10 - index,
+                    "total_amount": 1000.0 + index,
+                    "reason": "Часто закупалось учреждением",
+                    "recommendation_score": 20.0 - index,
+                }
+                for index in range(1, 9)
+            ],
+        }
+
+        with patch.object(service.personalization_service, "build_customer_profile", return_value=synthetic_profile):
+            payload = service.login("7700000000")
+
+        self.assertEqual(len(payload.frequentProducts), 8)
+        self.assertEqual(payload.frequentProducts[0]["steId"], "ste-1")
+
     def test_dedupe_suggestions_collapses_reordered_query_phrase(self) -> None:
         service = self.client.app.state.service
         suggestions = [
@@ -953,6 +1241,53 @@ class ApiTests(unittest.TestCase):
 
         self.assertEqual(len(deduped), 1)
         self.assertEqual(deduped[0].text.lower(), "колбаса сервелат варено копченая")
+
+    def test_completion_suggestions_surface_multiple_prefix_families(self) -> None:
+        service = self.client.app.state.service
+
+        suggestions = service._build_completion_suggestions(
+            query="моло",
+            query_payload={"completion_expansions": ["молоко", "молоток", "молотки"]},
+        )
+
+        suggestion_texts = [item.text.lower() for item in suggestions]
+        self.assertIn("молоко", suggestion_texts)
+        self.assertIn("молоток", suggestion_texts)
+        self.assertIn("молоко питьевое", suggestion_texts)
+
+    def test_diversify_suggestions_by_family_interleaves_different_heads(self) -> None:
+        service = self.client.app.state.service
+        suggestions = [
+            service._build_suggestion(
+                text="молоток",
+                suggestion_type="query",
+                reason="Продолжение запроса",
+                score=180.0,
+            ),
+            service._build_suggestion(
+                text="молоток отбойный",
+                suggestion_type="query",
+                reason="Продолжение запроса",
+                score=179.0,
+            ),
+            service._build_suggestion(
+                text="молоко",
+                suggestion_type="query",
+                reason="Продолжение запроса",
+                score=178.0,
+            ),
+        ]
+
+        diversified = service._diversify_suggestions_by_family(suggestions)
+
+        self.assertEqual(diversified[0].text.lower(), "молоток")
+        self.assertEqual(diversified[1].text.lower(), "молоко")
+
+    def test_suggestions_default_limit_can_expand_up_to_eight(self) -> None:
+        response = self.client.get("/api/search/suggestions", params={"q": "моло"})
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(len(payload), 7)
 
 
 if __name__ == "__main__":

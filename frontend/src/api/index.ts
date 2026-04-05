@@ -65,7 +65,7 @@ export const getSuggestions = async (
         return [];
     }
 
-    const params: Record<string, string> = { q: query };
+    const params: Record<string, string> = { q: query, top_k: '8' };
     const mergedViewedCategories = [...new Set([...(user?.viewedCategories ?? []), ...viewedCategories])]
         .filter((value) => value && value.trim().length > 0);
     const topCategories = (user?.topCategories ?? [])

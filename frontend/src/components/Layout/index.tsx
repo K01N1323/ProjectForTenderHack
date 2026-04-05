@@ -10,6 +10,7 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
     const navigate = useNavigate();
     const [isProfileOpen, setIsProfileOpen] = useState(false);
     const [isCartOpen, setIsCartOpen] = useState(false);
+    const [visibleFrequentProductsCount, setVisibleFrequentProductsCount] = useState(6);
     const profileRef = useRef<HTMLDivElement | null>(null);
 
     const handleLogout = () => {
@@ -29,6 +30,15 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, [isProfileOpen]);
+
+    useEffect(() => {
+        setVisibleFrequentProductsCount(6);
+    }, [isProfileOpen, user?.inn]);
+
+    const frequentProducts = user?.frequentProducts ?? [];
+    const hasHiddenFrequentProducts = frequentProducts.length > visibleFrequentProductsCount;
+    const canCollapseFrequentProducts =
+        frequentProducts.length > 6 && visibleFrequentProductsCount >= frequentProducts.length;
 
     return (
         <div className="min-h-screen bg-[#f6f7f9] font-sans text-gray-900 flex flex-col">
@@ -110,7 +120,7 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
                                                     Часто закупалось
                                                 </div>
                                                 <div className="space-y-3 pr-1">
-                                                    {(user.frequentProducts ?? []).slice(0, 6).map((item) => (
+                                                    {frequentProducts.slice(0, visibleFrequentProductsCount).map((item) => (
                                                         <div
                                                             key={item.steId}
                                                             className="pb-3 border-b border-gray-100 last:border-b-0 last:pb-0"
@@ -124,10 +134,32 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
                                                             </div>
                                                         </div>
                                                     ))}
-                                                    {(user.frequentProducts ?? []).length === 0 && (
+                                                    {frequentProducts.length === 0 && (
                                                         <div className="text-sm text-gray-500">
                                                             История закупок для этого ИНН пока не найдена.
                                                         </div>
+                                                    )}
+                                                    {hasHiddenFrequentProducts && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() =>
+                                                                setVisibleFrequentProductsCount((current) =>
+                                                                    Math.min(current + 6, frequentProducts.length),
+                                                                )
+                                                            }
+                                                            className="w-full rounded-[6px] border border-[#d9dde3] bg-[#f8fafc] px-3 py-2 text-sm font-semibold text-[#4b5563] transition-colors hover:border-[#c7cdd6] hover:bg-[#f1f5f9]"
+                                                        >
+                                                            Показать ещё
+                                                        </button>
+                                                    )}
+                                                    {canCollapseFrequentProducts && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setVisibleFrequentProductsCount(6)}
+                                                            className="w-full rounded-[6px] border border-transparent px-3 py-1.5 text-sm font-medium text-[#6b7280] transition-colors hover:text-[#374151]"
+                                                        >
+                                                            Свернуть
+                                                        </button>
                                                     )}
                                                 </div>
                                             </div>
