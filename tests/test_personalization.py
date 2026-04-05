@@ -94,6 +94,11 @@ class PersonalizationServiceTests(unittest.TestCase):
                     frequency INTEGER NOT NULL
                 );
 
+                CREATE TABLE customer_name_lookup (
+                    customer_inn TEXT PRIMARY KEY,
+                    customer_name TEXT NOT NULL
+                );
+
                 CREATE TABLE supplier_name_lookup (
                     supplier_inn TEXT PRIMARY KEY,
                     supplier_name TEXT NOT NULL
@@ -194,6 +199,16 @@ class PersonalizationServiceTests(unittest.TestCase):
                 "INSERT INTO supplier_region_lookup (supplier_inn, supplier_region, frequency) VALUES (?, ?, ?)",
                 ("supp-1", "Москва", 9),
             )
+            conn.executemany(
+                "INSERT INTO customer_name_lookup (customer_inn, customer_name) VALUES (?, ?)",
+                [
+                    ("cust-1", "ГБУЗ Городская поликлиника № 1"),
+                    ("cust-2", "ГБУЗ Клиническая больница № 2"),
+                    ("cust-3", "ГБУЗ Диагностический центр № 3"),
+                    ("cust-4", "МБОУ Школа № 7"),
+                    ("cust-sparse", "ГБУЗ Детская поликлиника № 5"),
+                ],
+            )
             conn.execute(
                 "INSERT INTO supplier_name_lookup (supplier_inn, supplier_name) VALUES (?, ?)",
                 ("supp-1", "Поставщик 1"),
@@ -289,6 +304,28 @@ class PersonalizationServiceTests(unittest.TestCase):
         self.assertEqual(payload["entity_type"], "supplier")
         self.assertEqual(payload["customer_name"], "Поставщик 1")
         self.assertEqual(payload["institution_name_archetype_label"], "Поставщик")
+
+    def test_customer_name_context_uses_sqlite_lookup_without_scanning_contracts(self) -> None:
+        from unittest.mock import patch
+
+        with patch.object(
+            self.service,
+            "_infer_csv_delimiter",
+            side_effect=AssertionError("contracts csv scan should not run when customer_name_lookup is available"),
+        ):
+            payload = self.service.get_customer_name_context("cust-1")
+
+        self.assertEqual(payload["customer_name"], "ГБУЗ Городская поликлиника № 1")
+        self.assertEqual(payload["institution_name_archetype"], "healthcare")
+
+    def test_customer_name_archetype_detects_healthcare_for_drug_supply_center(self) -> None:
+        archetype, signal_stems, scores = self.service._infer_customer_name_archetype(
+            "Государственное бюджетное учреждение здравоохранения города Москвы Центр лекарственного обеспечения Департамента здравоохранения города Москвы"
+        )
+
+        self.assertEqual(archetype, "healthcare")
+        self.assertTrue(signal_stems)
+        self.assertGreater(scores.get("healthcare", 0.0), scores.get("office_admin", 0.0))
 
     def test_rerank_ste_boosts_matching_history_and_category(self) -> None:
         profile = self.service.build_customer_profile("cust-1")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import math
 import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
@@ -20,6 +21,8 @@ HISTORY_REASON_PRIORITIES = {
     "RECENT_SIMILAR_PURCHASE": 3.0,
     "USER_CATEGORY_AFFINITY": 2.0,
     "SUPPLIER_AFFINITY": 1.0,
+    "SUPPLIER_OWN_PRODUCT": 2.5,
+    "SUPPLIER_CATEGORY_MATCH": 1.2,
 }
 
 
@@ -124,16 +127,25 @@ class PersonalizationRuntimeService:
             prediction = predictions_by_id.get(candidate_id, {})
             personalization_score = float(prediction.get("personalization_score", 0.0) or 0.0)
             query_match_quality = self._query_match_quality(candidate)
+            supplier_inventory_score, supplier_reason_codes, supplier_reasons = self._supplier_inventory_adjustment(
+                candidate=candidate,
+                user_profile=user_profile,
+                query_match_quality=query_match_quality,
+            )
             dynamic_score, dynamic_reason_codes, dynamic_reasons = self._dynamic_session_adjustment(
                 candidate=candidate,
                 session_state=active_session_state,
             )
             session_priority = self._session_priority(dynamic_reason_codes)
             reason_codes = unique_preserve_order(
-                [str(code) for code in prediction.get("top_reason_codes", [])] + dynamic_reason_codes
+                [str(code) for code in prediction.get("top_reason_codes", [])]
+                + supplier_reason_codes
+                + dynamic_reason_codes
             )
             reasons = unique_preserve_order(
-                [str(text) for text in prediction.get("reasons", [])] + dynamic_reasons
+                [str(text) for text in prediction.get("reasons", [])]
+                + supplier_reasons
+                + dynamic_reasons
             )
             history_priority = self._history_priority(
                 candidate=candidate,
@@ -145,6 +157,7 @@ class PersonalizationRuntimeService:
             final_score = (
                 float(candidate.get("search_score", 0.0))
                 + self.personalization_weight * personalization_score * max(0.25, query_match_quality)
+                + supplier_inventory_score
                 + dynamic_score
                 + min(6.0, history_priority * 0.03)
             )
@@ -171,6 +184,43 @@ class PersonalizationRuntimeService:
             reverse=True,
         )
         return reranked
+
+    @staticmethod
+    def _supplier_inventory_adjustment(
+        *,
+        candidate: Dict[str, object],
+        user_profile: Dict[str, object],
+        query_match_quality: float,
+    ) -> tuple[float, List[str], List[str]]:
+        if str(user_profile.get("entity_type") or "") != "supplier":
+            return 0.0, [], []
+        if query_match_quality < 0.35:
+            return 0.0, [], []
+
+        ste_id = str(candidate.get("ste_id") or candidate.get("candidate_id") or "")
+        category = str(candidate.get("category") or "")
+        ste_counts = {str(key): int(value) for key, value in dict(user_profile.get("ste_counts", {})).items()}
+        category_counts = {str(key): int(value) for key, value in dict(user_profile.get("category_counts", {})).items()}
+
+        own_ste_count = ste_counts.get(ste_id, 0)
+        if own_ste_count > 0:
+            score = 0.9 + min(1.0, math.log1p(float(own_ste_count)) / 4.0)
+            return (
+                round(score, 6),
+                ["SUPPLIER_OWN_PRODUCT"],
+                ["Поставщик уже поставлял этот товар"],
+            )
+
+        own_category_count = category_counts.get(category, 0)
+        if own_category_count > 0 and query_match_quality >= 0.45:
+            score = 0.25 + min(0.75, math.log1p(float(own_category_count)) / 6.0)
+            return (
+                round(score, 6),
+                ["SUPPLIER_CATEGORY_MATCH"],
+                ["Поставщик работает в этой категории"],
+            )
+
+        return 0.0, [], []
 
     def _history_priority(
         self,

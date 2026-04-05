@@ -124,6 +124,8 @@ CUSTOMER_NAME_ARCHETYPE_KEYWORDS = {
         "обуз",
         "больница",
         "поликлиника",
+        "здравоохранения",
+        "здравоохранение",
         "клиническая",
         "госпиталь",
         "диспансер",
@@ -133,10 +135,17 @@ CUSTOMER_NAME_ARCHETYPE_KEYWORDS = {
         "санаторий",
         "медицинский",
         "медико",
+        "диагностический",
         "стоматологическая",
         "амбулатория",
         "фельдшерский",
         "аптека",
+        "лекарственного",
+        "лекарственное",
+        "лекарственных",
+        "фармацевтический",
+        "фармацевтическая",
+        "фармацевтического",
     },
     "education": {
         "гбоу",
@@ -583,6 +592,56 @@ class PersonalizationService:
         self._supplier_name_by_inn[supplier_inn] = supplier_name
         return supplier_name
 
+    def _load_name_lookup_index_from_sqlite(self) -> bool:
+        loaded = False
+        try:
+            rows = self.conn.execute(
+                """
+                SELECT customer_inn, customer_name
+                FROM customer_name_lookup
+                """
+            ).fetchall()
+        except sqlite3.OperationalError:
+            rows = []
+        for row in rows:
+            customer_inn = str(row["customer_inn"] or "").strip()
+            customer_name = str(row["customer_name"] or "").strip()
+            if not customer_inn or not customer_name:
+                continue
+            current_name = self._customer_name_by_inn.get(customer_inn, "")
+            if len(normalize_text(customer_name)) >= len(normalize_text(current_name)):
+                self._customer_name_by_inn[customer_inn] = customer_name
+                loaded = True
+
+        try:
+            rows = self.conn.execute(
+                """
+                SELECT supplier_inn, supplier_name
+                FROM supplier_name_lookup
+                """
+            ).fetchall()
+        except sqlite3.OperationalError:
+            rows = []
+        for row in rows:
+            supplier_inn = str(row["supplier_inn"] or "").strip()
+            supplier_name = str(row["supplier_name"] or "").strip()
+            if not supplier_inn or not supplier_name:
+                continue
+            current_name = self._supplier_name_by_inn.get(supplier_inn, "")
+            if len(normalize_text(supplier_name)) >= len(normalize_text(current_name)):
+                self._supplier_name_by_inn[supplier_inn] = supplier_name
+                loaded = True
+
+        if not self._customer_name_by_inn:
+            return loaded
+
+        for customer_inn, customer_name in self._customer_name_by_inn.items():
+            archetype, signal_stems, scores = self._infer_customer_name_archetype(customer_name)
+            self._customer_name_archetype_by_inn[customer_inn] = archetype
+            self._customer_name_signal_stems_by_inn[customer_inn] = signal_stems
+            self._customer_name_archetype_scores_by_inn[customer_inn] = scores
+        return loaded
+
     @staticmethod
     def _clean_contract_lookup_text(value: object) -> str:
         if value is None:
@@ -603,6 +662,8 @@ class PersonalizationService:
             return
 
         self._customer_name_index_loaded = True
+        if self._load_name_lookup_index_from_sqlite():
+            return
         contracts_path = self.contracts_path
         if not contracts_path or not contracts_path.exists():
             return

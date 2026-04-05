@@ -59,12 +59,14 @@ def build_supplier_personalization_assets(
         conn.execute("DELETE FROM supplier_ste_stats")
         conn.execute("DELETE FROM supplier_category_stats")
         conn.execute("DELETE FROM supplier_region_lookup")
+        conn.execute("DELETE FROM customer_name_lookup")
         conn.execute("DELETE FROM supplier_name_lookup")
         conn.commit()
 
         supplier_ste_buffer: dict[tuple[str, str], AggregateStats] = {}
         supplier_category_buffer: dict[tuple[str, int], AggregateStats] = {}
         supplier_region_counter: dict[str, Counter[str]] = defaultdict(Counter)
+        customer_name_lookup: dict[str, str] = {}
         supplier_name_lookup: dict[str, str] = {}
 
         with contracts_path.open("r", encoding="utf-8-sig", newline="") as source:
@@ -79,16 +81,19 @@ def build_supplier_personalization_assets(
                     ste_id,
                     contract_datetime,
                     contract_amount,
-                    _customer_inn,
-                    _customer_name,
+                    customer_inn,
+                    customer_name,
                     _customer_region,
                     supplier_inn,
                     supplier_name,
                     supplier_region,
                 ) = [clean_text(value) for value in row]
 
+                customer_inn = customer_inn or "UNKNOWN"
                 supplier_inn = supplier_inn or "UNKNOWN"
                 supplier_region = supplier_region or "UNKNOWN"
+                if customer_name and len(customer_name) >= len(customer_name_lookup.get(customer_inn, "")):
+                    customer_name_lookup[customer_inn] = customer_name
                 if supplier_name and len(supplier_name) >= len(supplier_name_lookup.get(supplier_inn, "")):
                     supplier_name_lookup[supplier_inn] = supplier_name
                 category_id = int(ste_to_category_id.get(ste_id, 0))
@@ -125,6 +130,10 @@ def build_supplier_personalization_assets(
         conn.executemany(
             "INSERT INTO supplier_region_lookup (supplier_inn, supplier_region, frequency) VALUES (?, ?, ?)",
             supplier_region_rows,
+        )
+        conn.executemany(
+            "INSERT INTO customer_name_lookup (customer_inn, customer_name) VALUES (?, ?)",
+            sorted(customer_name_lookup.items()),
         )
         conn.executemany(
             "INSERT INTO supplier_name_lookup (supplier_inn, supplier_name) VALUES (?, ?)",

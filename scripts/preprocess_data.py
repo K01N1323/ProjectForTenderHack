@@ -213,6 +213,11 @@ def build_sqlite_schema(conn: sqlite3.Connection) -> None:
             frequency INTEGER NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS customer_name_lookup (
+            customer_inn TEXT PRIMARY KEY,
+            customer_name TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS supplier_name_lookup (
             supplier_inn TEXT PRIMARY KEY,
             supplier_name TEXT NOT NULL
@@ -680,6 +685,7 @@ def process_contracts(
     region_category_buffer: Dict[Tuple[str, int], AggregateStats] = {}
     contract_key_buffer: Dict[Tuple[str, str, str], int] = defaultdict(int)
     supplier_region_counter: dict[str, Counter[str]] = defaultdict(Counter)
+    customer_name_lookup: Dict[str, str] = {}
     supplier_name_lookup: Dict[str, str] = {}
 
     unique_customers = set()
@@ -739,6 +745,10 @@ def process_contracts(
             unique_regions.add(customer_region)
             region_counter[customer_region] += 1
             supplier_region_counter[supplier_inn][supplier_region] += 1
+            if customer_name and len(normalize_for_search(customer_name)) >= len(
+                normalize_for_search(customer_name_lookup.get(customer_inn, ""))
+            ):
+                customer_name_lookup[customer_inn] = customer_name
             if supplier_name and len(normalize_for_search(supplier_name)) >= len(
                 normalize_for_search(supplier_name_lookup.get(supplier_inn, ""))
             ):
@@ -816,6 +826,11 @@ def process_contracts(
     conn.executemany(
         "INSERT INTO supplier_region_lookup (supplier_inn, supplier_region, frequency) VALUES (?, ?, ?)",
         supplier_region_rows,
+    )
+    conn.execute("DELETE FROM customer_name_lookup")
+    conn.executemany(
+        "INSERT INTO customer_name_lookup (customer_inn, customer_name) VALUES (?, ?)",
+        sorted(customer_name_lookup.items()),
     )
     conn.execute("DELETE FROM supplier_name_lookup")
     conn.executemany(
