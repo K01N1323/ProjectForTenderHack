@@ -492,6 +492,27 @@ class ApiTests(unittest.TestCase):
                     PRIMARY KEY (customer_inn, ste_id)
                 );
 
+                CREATE TABLE supplier_category_stats (
+                    supplier_inn TEXT NOT NULL,
+                    category_id INTEGER NOT NULL,
+                    purchase_count INTEGER NOT NULL,
+                    total_amount REAL NOT NULL,
+                    first_purchase_dt TEXT,
+                    last_purchase_dt TEXT,
+                    PRIMARY KEY (supplier_inn, category_id)
+                );
+
+                CREATE TABLE supplier_ste_stats (
+                    supplier_inn TEXT NOT NULL,
+                    ste_id TEXT NOT NULL,
+                    category_id INTEGER NOT NULL,
+                    purchase_count INTEGER NOT NULL,
+                    total_amount REAL NOT NULL,
+                    first_purchase_dt TEXT,
+                    last_purchase_dt TEXT,
+                    PRIMARY KEY (supplier_inn, ste_id)
+                );
+
                 CREATE TABLE region_category_stats (
                     customer_region TEXT NOT NULL,
                     category_id INTEGER NOT NULL,
@@ -506,6 +527,17 @@ class ApiTests(unittest.TestCase):
                     customer_inn TEXT PRIMARY KEY,
                     customer_region TEXT NOT NULL,
                     frequency INTEGER NOT NULL
+                );
+
+                CREATE TABLE supplier_region_lookup (
+                    supplier_inn TEXT PRIMARY KEY,
+                    supplier_region TEXT NOT NULL,
+                    frequency INTEGER NOT NULL
+                );
+
+                CREATE TABLE supplier_name_lookup (
+                    supplier_inn TEXT PRIMARY KEY,
+                    supplier_name TEXT NOT NULL
                 );
 
                 CREATE TABLE ste_offer_lookup (
@@ -572,6 +604,30 @@ class ApiTests(unittest.TestCase):
             )
             conn.executemany(
                 """
+                INSERT INTO supplier_category_stats (
+                    supplier_inn, category_id, purchase_count, total_amount, first_purchase_dt, last_purchase_dt
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    ("1234567890", 1, 6, 1320.0, "2024-01-01", "2025-01-10"),
+                    ("1234567890", 3, 1, 110.0, "2024-06-10", "2024-06-10"),
+                    ("1111111111", 5, 22, 30580.0, "2024-01-01", "2025-01-14"),
+                ],
+            )
+            conn.executemany(
+                """
+                INSERT INTO supplier_ste_stats (
+                    supplier_inn, ste_id, category_id, purchase_count, total_amount, first_purchase_dt, last_purchase_dt
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    ("1234567890", "ste-1", 1, 5, 1120.0, "2024-01-01", "2025-01-10"),
+                    ("1234567890", "ste-3", 3, 1, 110.0, "2024-06-10", "2024-06-10"),
+                    ("1111111111", "ste-7", 5, 22, 30580.0, "2024-01-01", "2025-01-14"),
+                ],
+            )
+            conn.executemany(
+                """
                 INSERT INTO region_category_stats (
                     customer_region, category_id, purchase_count, total_amount, first_purchase_dt, last_purchase_dt
                 ) VALUES (?, ?, ?, ?, ?, ?)
@@ -589,6 +645,20 @@ class ApiTests(unittest.TestCase):
                     ("7702155262", "Москва", 8),
                     ("7707654321", "Москва", 5),
                     ("7707654322", "Москва", 5),
+                ],
+            )
+            conn.executemany(
+                "INSERT INTO supplier_region_lookup (supplier_inn, supplier_region, frequency) VALUES (?, ?, ?)",
+                [
+                    ("1234567890", "Москва", 6),
+                    ("1111111111", "Москва", 10),
+                ],
+            )
+            conn.executemany(
+                "INSERT INTO supplier_name_lookup (supplier_inn, supplier_name) VALUES (?, ?)",
+                [
+                    ("1234567890", "Поставщик 1"),
+                    ("1111111111", "Поставщик 2"),
                 ],
             )
             conn.executemany(
@@ -656,6 +726,40 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(service.cache_service.backend_name, "memory")
         self.assertIsInstance(cached_payload, dict)
         self.assertEqual(cached_payload["inn"], "7701234567")
+
+    def test_login_returns_supplier_profile_for_supplier_inn(self) -> None:
+        response = self.client.post("/api/auth/login", json={"inn": "1234567890"})
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["inn"], "1234567890")
+        self.assertEqual(payload["region"], "Москва")
+        self.assertEqual(payload["entityType"], "supplier")
+        self.assertEqual(payload["customerName"], "Поставщик 1")
+        self.assertEqual(payload["organizationTypeCode"], "supplier")
+        self.assertEqual(payload["organizationTypeLabel"], "Поставщик")
+        self.assertEqual(payload["organizationTypeSource"], "По профилю поставщика")
+        self.assertTrue(payload["topCategories"])
+        self.assertEqual(payload["topCategories"][0]["category"], "Ручки канцелярские")
+        self.assertTrue(payload["frequentProducts"])
+        self.assertEqual(payload["frequentProducts"][0]["steId"], "ste-1")
+
+    def test_login_returns_supplier_profile_without_contract_name_scan(self) -> None:
+        service = self.client.app.state.service
+        cache_key = service.cache_service.build_key(
+            "login",
+            data={"inn": "1234567890", "version": service.LOGIN_CACHE_VERSION},
+        )
+        service.cache_service.delete(cache_key)
+        with patch.object(
+            service.personalization_service,
+            "_ensure_customer_name_index_loaded",
+            side_effect=AssertionError("customer contracts scan should not run for supplier login"),
+        ):
+            payload = service.login("1234567890")
+
+        self.assertEqual(payload.entityType, "supplier")
+        self.assertEqual(payload.customerName, "Поставщик 1")
+        self.assertEqual(payload.organizationTypeCode, "supplier")
 
     def test_login_falls_back_to_history_based_organization_type(self) -> None:
         service = self.client.app.state.service
@@ -1287,6 +1391,42 @@ class ApiTests(unittest.TestCase):
         payload = response.json()
         self.assertTrue(payload["items"])
         self.assertEqual(payload["items"][0]["id"], "ste-7")
+
+    def test_supplier_inn_preserves_session_between_event_and_search(self) -> None:
+        event_response = self.client.post(
+            "/api/event",
+            json={
+                "inn": "1234567890",
+                "region": "Москва",
+                "eventType": "cart_add",
+                "steId": "ste-1",
+                "category": "Ручки канцелярские",
+            },
+        )
+        self.assertEqual(event_response.status_code, 200)
+        self.assertEqual(event_response.json()["userId"], "user-1234567890")
+        self.assertIn("ste-1", event_response.json()["cartSteIds"])
+
+        response = self.client.post(
+            "/api/search",
+            json={
+                "query": "ручка",
+                "userContext": {
+                    "inn": "1234567890",
+                    "region": "Москва",
+                    "viewedCategories": [],
+                },
+                "viewedCategories": [],
+                "bouncedCategories": [],
+                "topK": 5,
+                "min_score": 0.0,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["items"])
+        ste1_item = next(item for item in payload["items"] if item["id"] == "ste-1")
+        self.assertEqual(ste1_item["reasonToShow"], "Рекомендовано вам исходя из корзины")
 
     def test_second_quick_item_close_demotes_bounced_category_in_search(self) -> None:
         dynamic_user_id = "user-second-bounce-search"

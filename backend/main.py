@@ -135,6 +135,7 @@ class UserPayload(BaseModel):
     id: str
     inn: str
     region: str
+    entityType: Optional[str] = None
     customerName: Optional[str] = None
     organizationTypeCode: Optional[str] = None
     organizationTypeLabel: Optional[str] = None
@@ -220,9 +221,9 @@ class EventResponsePayload(BaseModel):
 
 
 class TenderHackApiService:
-    LOGIN_CACHE_VERSION = 9
-    SEARCH_CACHE_VERSION = 12
-    SUGGESTIONS_CACHE_VERSION = 27
+    LOGIN_CACHE_VERSION = 11
+    SEARCH_CACHE_VERSION = 13
+    SUGGESTIONS_CACHE_VERSION = 28
     PROFILE_TOP_CATEGORIES_LIMIT = 6
     PROFILE_FREQUENT_PRODUCTS_LIMIT = 18
     MAX_HISTORY_CATEGORY_SUGGESTIONS = 1
@@ -316,6 +317,12 @@ class TenderHackApiService:
 
     @staticmethod
     def _resolve_organization_type_payload(*, profile: dict, customer_name_context: dict) -> dict:
+        if str(profile.get("entity_type") or "") == "supplier":
+            return {
+                "organizationTypeCode": "supplier",
+                "organizationTypeLabel": "Поставщик",
+                "organizationTypeSource": "По профилю поставщика",
+            }
         name_code = str(customer_name_context.get("institution_name_archetype") or "").strip()
         name_label = str(customer_name_context.get("institution_name_archetype_label") or "").strip()
         history_code = str(profile.get("institution_archetype") or "").strip()
@@ -365,11 +372,11 @@ class TenderHackApiService:
         if isinstance(cached_payload, dict):
             return UserPayload(**cached_payload)
 
-        profile = self.personalization_service.build_customer_profile(
-            customer_inn=inn,
+        profile = self.personalization_service.build_profile_by_inn(
+            inn,
             top_ste=self.PROFILE_FREQUENT_PRODUCTS_LIMIT,
         )
-        customer_name_context = self.personalization_service.get_customer_name_context(inn)
+        customer_name_context = self.personalization_service.get_entity_name_context(inn)
         organization_type_payload = self._resolve_organization_type_payload(
             profile=profile,
             customer_name_context=customer_name_context,
@@ -385,10 +392,12 @@ class TenderHackApiService:
         frequent_products = self._load_frequent_products(
             recommended_ste[: self.PROFILE_FREQUENT_PRODUCTS_LIMIT]
         )
+        entity_type = str(profile.get("entity_type") or "customer")
         payload = UserPayload(
             id=f"user-{inn}",
             inn=inn,
             region=region,
+            entityType=entity_type,
             customerName=str(customer_name_context.get("customer_name") or "") or None,
             organizationTypeCode=str(organization_type_payload.get("organizationTypeCode") or "") or None,
             organizationTypeLabel=str(organization_type_payload.get("organizationTypeLabel") or "") or None,
@@ -1321,7 +1330,7 @@ class TenderHackApiService:
             return [item for item in cached_payload if isinstance(item, dict)]
 
         try:
-            profile = self.personalization_service.build_customer_profile(customer_inn=user_inn, top_ste=150)
+            profile = self.personalization_service.build_profile_by_inn(user_inn, top_ste=150)
             recommended_ste = list(profile.get("recommended_ste") or profile.get("top_ste") or [])
             frequent_products = self._load_frequent_products(recommended_ste[:150])
         except Exception:
@@ -1408,7 +1417,7 @@ class TenderHackApiService:
             return [item for item in cached_payload if isinstance(item, dict)]
 
         try:
-            name_context = self.personalization_service.get_customer_name_context(user_inn, limit=180)
+            name_context = self.personalization_service.get_entity_name_context(user_inn, limit=180)
         except Exception:
             return []
 
