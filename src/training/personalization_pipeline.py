@@ -287,11 +287,28 @@ def _build_ranking_rows(
 
     max_positive_events_total = int(ranking_config.get("max_positive_events_total", 60000))
     max_positive_events_per_user = int(ranking_config.get("max_positive_events_per_user", 250))
+    progress_every_processed = int(ranking_config.get("progress_every_processed", 25000))
+    progress_every_emitted = int(ranking_config.get("progress_every_emitted", 1000))
     query_variants = list(ranking_config["query_variants"])
     group_counter = 0
 
     for contract in contracts:
+        if stats["emitted_positive_events"] >= max_positive_events_total:
+            print(
+                f"[Personalization] reached emitted limit {max_positive_events_total:,}; stopping early",
+                flush=True,
+            )
+            break
+
         stats["processed_positive_events"] += 1
+        if progress_every_processed > 0 and stats["processed_positive_events"] % progress_every_processed == 0:
+            print(
+                "[Personalization] processed "
+                f"{stats['processed_positive_events']:,} contracts, "
+                f"emitted {stats['emitted_positive_events']:,} positives, "
+                f"rows {len(rows):,}",
+                flush=True,
+            )
         ste = catalog_by_id.get(contract.ste_id)
         if ste is None:
             stats["skipped_missing_catalog_match"] += 1
@@ -355,6 +372,13 @@ def _build_ranking_rows(
                 stats["groups_total"] += 1
             stats["emitted_positive_events"] += 1
             per_user_emitted[contract.customer_inn] += 1
+            if progress_every_emitted > 0 and stats["emitted_positive_events"] % progress_every_emitted == 0:
+                print(
+                    "[Personalization] emitted "
+                    f"{stats['emitted_positive_events']:,} positives "
+                    f"from {stats['processed_positive_events']:,} processed contracts",
+                    flush=True,
+                )
 
         user_state.update(contract, ste)
         global_state.update(contract, ste, user_state.segment_key())
@@ -413,6 +437,54 @@ def _select_best_query_variant(rows: list[dict[str, object]], active_user_thresh
             best_score = metrics["ndcg@10"]
             best_variant = variant
     return best_variant, benchmark
+
+
+def _fallback_group_split(
+    rows: list[dict[str, object]],
+    *,
+    train_ratio: float = 0.7,
+    val_ratio: float = 0.15,
+) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]], bool]:
+    train_rows = [row for row in rows if row["split"] == "train"]
+    val_rows = [row for row in rows if row["split"] == "val"]
+    test_rows = [row for row in rows if row["split"] == "test"]
+    if train_rows and val_rows and test_rows:
+        return train_rows, val_rows, test_rows, False
+
+    ordered_group_ids = []
+    grouped_rows: dict[str, list[dict[str, object]]] = {}
+    for row in rows:
+        group_id = str(row["group_id"])
+        if group_id not in grouped_rows:
+            grouped_rows[group_id] = []
+            ordered_group_ids.append(group_id)
+        grouped_rows[group_id].append(row)
+
+    group_count = len(ordered_group_ids)
+    if group_count < 3:
+        return train_rows, val_rows, test_rows, False
+
+    train_cutoff = max(1, min(group_count - 2, int(group_count * train_ratio)))
+    val_cutoff = max(train_cutoff + 1, min(group_count - 1, int(group_count * (train_ratio + val_ratio))))
+
+    reassigned_train: list[dict[str, object]] = []
+    reassigned_val: list[dict[str, object]] = []
+    reassigned_test: list[dict[str, object]] = []
+    for index, group_id in enumerate(ordered_group_ids):
+        if index < train_cutoff:
+            target = "train"
+            bucket = reassigned_train
+        elif index < val_cutoff:
+            target = "val"
+            bucket = reassigned_val
+        else:
+            target = "test"
+            bucket = reassigned_test
+        for row in grouped_rows[group_id]:
+            updated = dict(row)
+            updated["split"] = target
+            bucket.append(updated)
+    return reassigned_train, reassigned_val, reassigned_test, True
 
 
 def _encode_group_ids(rows: list[dict[str, object]]) -> tuple[list[list[float]], list[float], list[int], list[dict[str, object]]]:
@@ -709,9 +781,9 @@ def run_pipeline(project_root: Path | str = ".", config_path: Optional[Path | st
     per_object_contributions = []
     notes = []
 
-    train_rows = [row for row in selected_rows if row["split"] == "train"]
-    val_rows = [row for row in selected_rows if row["split"] == "val"]
-    test_rows = [row for row in selected_rows if row["split"] == "test"]
+    train_rows, val_rows, test_rows, used_fallback_split = _fallback_group_split(selected_rows)
+    if used_fallback_split:
+        notes.append("Time split не дал val/test; применен fallback group split для обучения runtime-модели.")
 
     if not CATBOOST_AVAILABLE:
         notes.append(f"CatBoost недоступен в текущем окружении: {CATBOOST_IMPORT_ERROR}")

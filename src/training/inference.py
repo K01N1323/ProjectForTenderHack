@@ -35,6 +35,13 @@ class PersonalizationPredictor:
         prediction = self.model.predict(matrix)
         if isinstance(prediction, list):
             return float(prediction[0])
+        if hasattr(prediction, "tolist"):
+            values = prediction.tolist()
+            if isinstance(values, list):
+                while isinstance(values, list) and values:
+                    values = values[0]
+                if values is not None:
+                    return float(values)
         return float(prediction)
 
     def predict_personalization(
@@ -76,4 +83,3 @@ def predict_personalization(
 ) -> list[dict[str, object]]:
     predictor = PersonalizationPredictor(model_path=model_path)
     return predictor.predict_personalization(candidates=candidates, user_profile=user_profile, query_features=query_features)
-

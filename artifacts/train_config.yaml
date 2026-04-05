@@ -2,7 +2,9 @@
   "seed": 42,
   "paths": {
     "artifacts_dir": "artifacts",
-    "reports_dir": "reports"
+    "reports_dir": "reports",
+    "ste_catalog_path": "data/processed/ste_catalog_personalization_quick.csv",
+    "contracts_path": "data/processed/contracts_personalization_quick.csv"
   },
   "ranking_dataset": {
     "query_variants": [
@@ -15,9 +17,11 @@
     "random_negatives": 2,
     "same_category_negatives": 2,
     "similar_text_negatives": 2,
-    "max_positive_events_total": 60000,
-    "max_positive_events_per_user": 250,
-    "deduplicate_contract_keys": true
+    "max_positive_events_total": 1000,
+    "max_positive_events_per_user": 60,
+    "deduplicate_contract_keys": true,
+    "progress_every_processed": 250,
+    "progress_every_emitted": 100
   },
   "time_split": {
     "strategy": "ratio",
@@ -29,18 +33,18 @@
   },
   "catboost": {
     "enabled": true,
-    "pairwise_benchmark": true,
-    "loss_function": "YetiRank",
+    "pairwise_benchmark": false,
+    "loss_function": "YetiRankPairwise",
     "eval_metric": "NDCG:top=10",
-    "iterations": 500,
-    "learning_rate": 0.05,
+    "iterations": 80,
+    "learning_rate": 0.08,
     "depth": 6,
     "l2_leaf_reg": 6.0,
     "random_strength": 0.5,
     "subsample": 0.8,
     "random_seed": 42,
-    "early_stopping_rounds": 50,
-    "verbose": 100,
+    "early_stopping_rounds": 15,
+    "verbose": 20,
     "use_best_model": true
   }
 }

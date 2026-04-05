@@ -1,14 +1,694 @@
 {
-  "status": "missing_input",
-  "selected_query_variant": null,
-  "ranking_dataset": {},
-  "pseudo_query_benchmark": {},
-  "model_comparison": {},
-  "global_feature_importance": [],
-  "per_object_contributions": [],
+  "status": "ready",
+  "selected_query_variant": "contract_item_name",
+  "time_split": {
+    "train_end": "2023-12-27",
+    "val_end": "2025-01-22"
+  },
+  "ranking_dataset": {
+    "processed_positive_events": 1006,
+    "emitted_positive_events": 1000,
+    "skipped_missing_catalog_match": 6,
+    "skipped_empty_query": 0,
+    "rows_total": 35000,
+    "groups_total": 5000,
+    "rows_by_split": {
+      "train": 35000
+    }
+  },
+  "pseudo_query_benchmark": {
+    "contract_item_name": {
+      "groups": 0,
+      "ndcg@5": 0.0,
+      "ndcg@10": 0.0,
+      "mrr@10": 0.0,
+      "recall@10": 0.0,
+      "hitrate@10": 0.0
+    },
+    "contract_plus_category": {
+      "groups": 0,
+      "ndcg@5": 0.0,
+      "ndcg@10": 0.0,
+      "mrr@10": 0.0,
+      "recall@10": 0.0,
+      "hitrate@10": 0.0
+    },
+    "ste_name": {
+      "groups": 0,
+      "ndcg@5": 0.0,
+      "ndcg@10": 0.0,
+      "mrr@10": 0.0,
+      "recall@10": 0.0,
+      "hitrate@10": 0.0
+    },
+    "ste_name_category_attributes": {
+      "groups": 0,
+      "ndcg@5": 0.0,
+      "ndcg@10": 0.0,
+      "mrr@10": 0.0,
+      "recall@10": 0.0,
+      "hitrate@10": 0.0
+    },
+    "ste_name_plus_category": {
+      "groups": 0,
+      "ndcg@5": 0.0,
+      "ndcg@10": 0.0,
+      "mrr@10": 0.0,
+      "recall@10": 0.0,
+      "hitrate@10": 0.0
+    }
+  },
+  "model_comparison": {
+    "baseline_non_personalized": {
+      "overall": {
+        "groups": 0,
+        "ndcg@5": 0.0,
+        "ndcg@10": 0.0,
+        "mrr@10": 0.0,
+        "recall@10": 0.0,
+        "hitrate@10": 0.0
+      },
+      "new_users": {
+        "groups": 0,
+        "ndcg@5": 0.0,
+        "ndcg@10": 0.0,
+        "mrr@10": 0.0,
+        "recall@10": 0.0,
+        "hitrate@10": 0.0
+      },
+      "active_users": {
+        "groups": 0,
+        "ndcg@5": 0.0,
+        "ndcg@10": 0.0,
+        "mrr@10": 0.0,
+        "recall@10": 0.0,
+        "hitrate@10": 0.0
+      },
+      "frequent_categories": {
+        "groups": 0,
+        "ndcg@5": 0.0,
+        "ndcg@10": 0.0,
+        "mrr@10": 0.0,
+        "recall@10": 0.0,
+        "hitrate@10": 0.0
+      },
+      "rare_categories": {
+        "groups": 0,
+        "ndcg@5": 0.0,
+        "ndcg@10": 0.0,
+        "mrr@10": 0.0,
+        "recall@10": 0.0,
+        "hitrate@10": 0.0
+      }
+    },
+    "baseline_rule_based": {
+      "overall": {
+        "groups": 0,
+        "ndcg@5": 0.0,
+        "ndcg@10": 0.0,
+        "mrr@10": 0.0,
+        "recall@10": 0.0,
+        "hitrate@10": 0.0
+      },
+      "new_users": {
+        "groups": 0,
+        "ndcg@5": 0.0,
+        "ndcg@10": 0.0,
+        "mrr@10": 0.0,
+        "recall@10": 0.0,
+        "hitrate@10": 0.0
+      },
+      "active_users": {
+        "groups": 0,
+        "ndcg@5": 0.0,
+        "ndcg@10": 0.0,
+        "mrr@10": 0.0,
+        "recall@10": 0.0,
+        "hitrate@10": 0.0
+      },
+      "frequent_categories": {
+        "groups": 0,
+        "ndcg@5": 0.0,
+        "ndcg@10": 0.0,
+        "mrr@10": 0.0,
+        "recall@10": 0.0,
+        "hitrate@10": 0.0
+      },
+      "rare_categories": {
+        "groups": 0,
+        "ndcg@5": 0.0,
+        "ndcg@10": 0.0,
+        "mrr@10": 0.0,
+        "recall@10": 0.0,
+        "hitrate@10": 0.0
+      }
+    },
+    "catboost_yetirank": {
+      "overall": {
+        "groups": 0,
+        "ndcg@5": 0.0,
+        "ndcg@10": 0.0,
+        "mrr@10": 0.0,
+        "recall@10": 0.0,
+        "hitrate@10": 0.0
+      },
+      "new_users": {
+        "groups": 0,
+        "ndcg@5": 0.0,
+        "ndcg@10": 0.0,
+        "mrr@10": 0.0,
+        "recall@10": 0.0,
+        "hitrate@10": 0.0
+      },
+      "active_users": {
+        "groups": 0,
+        "ndcg@5": 0.0,
+        "ndcg@10": 0.0,
+        "mrr@10": 0.0,
+        "recall@10": 0.0,
+        "hitrate@10": 0.0
+      },
+      "frequent_categories": {
+        "groups": 0,
+        "ndcg@5": 0.0,
+        "ndcg@10": 0.0,
+        "mrr@10": 0.0,
+        "recall@10": 0.0,
+        "hitrate@10": 0.0
+      },
+      "rare_categories": {
+        "groups": 0,
+        "ndcg@5": 0.0,
+        "ndcg@10": 0.0,
+        "mrr@10": 0.0,
+        "recall@10": 0.0,
+        "hitrate@10": 0.0
+      }
+    }
+  },
+  "global_feature_importance": [
+    {
+      "feature": "query_token_coverage",
+      "importance": 26.340946
+    },
+    {
+      "feature": "user_last_category_recency_days",
+      "importance": 18.318905
+    },
+    {
+      "feature": "days_since_last_similar_purchase",
+      "importance": 16.367241
+    },
+    {
+      "feature": "query_name_token_overlap",
+      "importance": 9.984048
+    },
+    {
+      "feature": "user_recent_30d_category_count",
+      "importance": 6.555544
+    },
+    {
+      "feature": "query_attribute_match_count",
+      "importance": 4.712612
+    },
+    {
+      "feature": "candidate_attribute_count",
+      "importance": 2.606012
+    },
+    {
+      "feature": "query_category_token_overlap",
+      "importance": 2.273113
+    },
+    {
+      "feature": "regional_ste_popularity",
+      "importance": 2.137138
+    },
+    {
+      "feature": "candidate_ste_recent_30d_popularity",
+      "importance": 1.920676
+    },
+    {
+      "feature": "candidate_name_length_tokens",
+      "importance": 1.771618
+    },
+    {
+      "feature": "user_last_ste_recency_days",
+      "importance": 1.629775
+    },
+    {
+      "feature": "query_length_tokens",
+      "importance": 1.522262
+    },
+    {
+      "feature": "category_price_p75",
+      "importance": 1.063617
+    },
+    {
+      "feature": "query_exact_name_match",
+      "importance": 0.592708
+    },
+    {
+      "feature": "candidate_item_kind_affinity",
+      "importance": 0.528966
+    },
+    {
+      "feature": "user_novelty_signal",
+      "importance": 0.436988
+    },
+    {
+      "feature": "candidate_price_proxy",
+      "importance": 0.351538
+    },
+    {
+      "feature": "user_supplier_purchase_count",
+      "importance": 0.312673
+    },
+    {
+      "feature": "global_ste_popularity",
+      "importance": 0.278144
+    }
+  ],
+  "per_object_contributions": [
+    {
+      "group_id": "167899277:5945001013:1403535:contract_item_name:4261",
+      "candidate_id": "1403535",
+      "top_positive_factors": [
+        {
+          "feature": "regional_ste_popularity",
+          "contribution": 0.142436
+        },
+        {
+          "feature": "query_name_token_overlap",
+          "contribution": 0.121145
+        },
+        {
+          "feature": "global_ste_popularity",
+          "contribution": 0.022335
+        },
+        {
+          "feature": "query_length_tokens",
+          "contribution": 0.013971
+        },
+        {
+          "feature": "candidate_name_length_tokens",
+          "contribution": 0.001047
+        }
+      ]
+    },
+    {
+      "group_id": "167899277:5945001013:1403535:contract_item_name:4261",
+      "candidate_id": "1458618",
+      "top_positive_factors": [
+        {
+          "feature": "query_name_token_overlap",
+          "contribution": 0.157307
+        },
+        {
+          "feature": "candidate_ste_recent_30d_popularity",
+          "contribution": 0.058241
+        },
+        {
+          "feature": "query_length_tokens",
+          "contribution": 0.025678
+        },
+        {
+          "feature": "global_ste_popularity",
+          "contribution": 0.022335
+        },
+        {
+          "feature": "candidate_name_length_tokens",
+          "contribution": 0.002467
+        }
+      ]
+    },
+    {
+      "group_id": "167899277:5945001013:1403535:contract_item_name:4261",
+      "candidate_id": "20679890",
+      "top_positive_factors": [
+        {
+          "feature": "query_token_coverage",
+          "contribution": 0.492105
+        },
+        {
+          "feature": "query_name_token_overlap",
+          "contribution": 0.206481
+        },
+        {
+          "feature": "user_last_ste_recency_days",
+          "contribution": 0.004736
+        },
+        {
+          "feature": "candidate_price_proxy",
+          "contribution": 0.001851
+        },
+        {
+          "feature": "query_attribute_match_count",
+          "contribution": 0.001577
+        }
+      ]
+    },
+    {
+      "group_id": "167899277:5945001013:1403535:contract_item_name:4261",
+      "candidate_id": "21815424",
+      "top_positive_factors": [
+        {
+          "feature": "query_name_token_overlap",
+          "contribution": 0.175514
+        },
+        {
+          "feature": "query_length_tokens",
+          "contribution": 0.025678
+        },
+        {
+          "feature": "candidate_name_length_tokens",
+          "contribution": 0.002472
+        },
+        {
+          "feature": "candidate_price_proxy",
+          "contribution": 0.001851
+        },
+        {
+          "feature": "category_price_p25",
+          "contribution": 0.00037
+        }
+      ]
+    },
+    {
+      "group_id": "167899277:5945001013:1403535:contract_item_name:4261",
+      "candidate_id": "34835465",
+      "top_positive_factors": [
+        {
+          "feature": "query_length_tokens",
+          "contribution": 0.02392
+        },
+        {
+          "feature": "candidate_name_length_tokens",
+          "contribution": 0.000535
+        }
+      ]
+    },
+    {
+      "group_id": "167899277:5945001013:1403535:contract_item_name:4261",
+      "candidate_id": "34946426",
+      "top_positive_factors": [
+        {
+          "feature": "query_name_token_overlap",
+          "contribution": 0.175514
+        },
+        {
+          "feature": "query_length_tokens",
+          "contribution": 0.025678
+        },
+        {
+          "feature": "candidate_price_proxy",
+          "contribution": 0.001851
+        },
+        {
+          "feature": "query_token_coverage",
+          "contribution": 0.000435
+        },
+        {
+          "feature": "category_price_p25",
+          "contribution": 0.00037
+        }
+      ]
+    },
+    {
+      "group_id": "167899277:5945001013:1403535:contract_item_name:4261",
+      "candidate_id": "46425292",
+      "top_positive_factors": [
+        {
+          "feature": "query_length_tokens",
+          "contribution": 0.02392
+        }
+      ]
+    },
+    {
+      "group_id": "168604152:7729583459:1304072:contract_item_name:4266",
+      "candidate_id": "1304072",
+      "top_positive_factors": [
+        {
+          "feature": "query_name_token_overlap",
+          "contribution": 0.149293
+        },
+        {
+          "feature": "query_category_token_overlap",
+          "contribution": 0.041931
+        },
+        {
+          "feature": "query_length_tokens",
+          "contribution": 0.025678
+        },
+        {
+          "feature": "query_token_coverage",
+          "contribution": 0.02133
+        },
+        {
+          "feature": "candidate_price_proxy",
+          "contribution": 0.000766
+        }
+      ]
+    },
+    {
+      "group_id": "168604152:7729583459:1304072:contract_item_name:4266",
+      "candidate_id": "1412924",
+      "top_positive_factors": [
+        {
+          "feature": "regional_ste_popularity",
+          "contribution": 0.127928
+        },
+        {
+          "feature": "query_name_token_overlap",
+          "contribution": 0.100239
+        },
+        {
+          "feature": "candidate_attribute_count",
+          "contribution": 0.045745
+        },
+        {
+          "feature": "query_category_token_overlap",
+          "contribution": 0.026306
+        },
+        {
+          "feature": "global_ste_popularity",
+          "contribution": 0.022335
+        }
+      ]
+    },
+    {
+      "group_id": "168604152:7729583459:1304072:contract_item_name:4266",
+      "candidate_id": "18803511",
+      "top_positive_factors": [
+        {
+          "feature": "query_name_token_overlap",
+          "contribution": 0.088811
+        },
+        {
+          "feature": "query_category_token_overlap",
+          "contribution": 0.050057
+        },
+        {
+          "feature": "query_length_tokens",
+          "contribution": 0.025678
+        },
+        {
+          "feature": "query_token_coverage",
+          "contribution": 0.016943
+        },
+        {
+          "feature": "regional_ste_popularity",
+          "contribution": 0.013464
+        }
+      ]
+    },
+    {
+      "group_id": "168604152:7729583459:1304072:contract_item_name:4266",
+      "candidate_id": "35270019",
+      "top_positive_factors": [
+        {
+          "feature": "query_category_token_overlap",
+          "contribution": 0.071016
+        },
+        {
+          "feature": "query_length_tokens",
+          "contribution": 0.025686
+        },
+        {
+          "feature": "query_token_coverage",
+          "contribution": 0.007929
+        }
+      ]
+    },
+    {
+      "group_id": "168686656:7707087471:20976790:contract_item_name:4251",
+      "candidate_id": "20976790",
+      "top_positive_factors": [
+        {
+          "feature": "query_name_token_overlap",
+          "contribution": 0.090152
+        },
+        {
+          "feature": "candidate_item_kind_affinity",
+          "contribution": 0.005065
+        }
+      ]
+    },
+    {
+      "group_id": "168686656:7707087471:20976790:contract_item_name:4251",
+      "candidate_id": "1192978",
+      "top_positive_factors": [
+        {
+          "feature": "query_name_token_overlap",
+          "contribution": 0.090152
+        },
+        {
+          "feature": "candidate_item_kind_affinity",
+          "contribution": 0.005065
+        }
+      ]
+    },
+    {
+      "group_id": "168686656:7707087471:20976790:contract_item_name:4251",
+      "candidate_id": "20086221",
+      "top_positive_factors": [
+        {
+          "feature": "query_name_token_overlap",
+          "contribution": 0.090152
+        }
+      ]
+    },
+    {
+      "group_id": "168686656:7707087471:20976790:contract_item_name:4251",
+      "candidate_id": "20757992",
+      "top_positive_factors": [
+        {
+          "feature": "candidate_item_kind_affinity",
+          "contribution": 0.005065
+        }
+      ]
+    },
+    {
+      "group_id": "168686656:7707087471:20976790:contract_item_name:4251",
+      "candidate_id": "35739115",
+      "top_positive_factors": [
+        {
+          "feature": "candidate_item_kind_affinity",
+          "contribution": 0.005065
+        },
+        {
+          "feature": "candidate_name_length_tokens",
+          "contribution": 0.002166
+        },
+        {
+          "feature": "query_name_token_overlap",
+          "contribution": 0.001073
+        }
+      ]
+    },
+    {
+      "group_id": "168686656:7707087471:20976790:contract_item_name:4251",
+      "candidate_id": "36151243",
+      "top_positive_factors": [
+        {
+          "feature": "candidate_item_kind_affinity",
+          "contribution": 0.005065
+        }
+      ]
+    },
+    {
+      "group_id": "168686656:7707087471:20976790:contract_item_name:4251",
+      "candidate_id": "36678956",
+      "top_positive_factors": [
+        {
+          "feature": "candidate_name_length_tokens",
+          "contribution": 0.006417
+        },
+        {
+          "feature": "candidate_item_kind_affinity",
+          "contribution": 0.005065
+        },
+        {
+          "feature": "query_name_token_overlap",
+          "contribution": 0.001073
+        }
+      ]
+    },
+    {
+      "group_id": "168712614:9717025245:19725312:contract_item_name:4256",
+      "candidate_id": "19725312",
+      "top_positive_factors": [
+        {
+          "feature": "candidate_name_length_tokens",
+          "contribution": 0.027557
+        }
+      ]
+    },
+    {
+      "group_id": "168712614:9717025245:19725312:contract_item_name:4256",
+      "candidate_id": "1188469",
+      "top_positive_factors": [
+        {
+          "feature": "query_name_token_overlap",
+          "contribution": 0.090152
+        }
+      ]
+    },
+    {
+      "group_id": "168712614:9717025245:19725312:contract_item_name:4256",
+      "candidate_id": "1192651",
+      "top_positive_factors": [
+        {
+          "feature": "query_name_token_overlap",
+          "contribution": 0.090082
+        }
+      ]
+    },
+    {
+      "group_id": "168712614:9717025245:19725312:contract_item_name:4256",
+      "candidate_id": "20003397",
+      "top_positive_factors": [
+        {
+          "feature": "candidate_name_length_tokens",
+          "contribution": 0.027557
+        }
+      ]
+    },
+    {
+      "group_id": "168712614:9717025245:19725312:contract_item_name:4256",
+      "candidate_id": "23991112",
+      "top_positive_factors": [
+        {
+          "feature": "query_name_token_overlap",
+          "contribution": 0.006535
+        }
+      ]
+    },
+    {
+      "group_id": "168712614:9717025245:19725312:contract_item_name:4256",
+      "candidate_id": "28409929",
+      "top_positive_factors": [
+        {
+          "feature": "candidate_attribute_count",
+          "contribution": 0.066503
+        },
+        {
+          "feature": "candidate_name_length_tokens",
+          "contribution": 0.032051
+        }
+      ]
+    },
+    {
+      "group_id": "168712614:9717025245:19725312:contract_item_name:4256",
+      "candidate_id": "37724886",
+      "top_positive_factors": [
+        {
+          "feature": "query_name_token_overlap",
+          "contribution": 0.081019
+        }
+      ]
+    }
+  ],
   "notes": [
-    "В репозитории отсутствуют оба обязательных входных датасета либо один из них.",
-    "Pipeline сгенерировал только статические артефакты и data contract.",
-    "Для реального обучения требуется положить каталог СТЕ и контракты в ожидаемые пути."
+    "Time split не дал val/test; применен fallback group split для обучения runtime-модели."
   ]
 }

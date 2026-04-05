@@ -104,12 +104,6 @@ EXPLAIN_RULES = [
         "threshold": 0.5,
     },
     {
-        "code": "REGIONAL_POPULARITY",
-        "template": "СТЕ популярно у заказчиков этого региона",
-        "feature": "regional_ste_popularity",
-        "threshold": 1.0,
-    },
-    {
         "code": "SIMILAR_CUSTOMER_POPULARITY",
         "template": "Позиция популярна у похожих заказчиков",
         "feature": "similar_customer_ste_popularity",

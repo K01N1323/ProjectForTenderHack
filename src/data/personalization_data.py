@@ -208,14 +208,14 @@ def resolve_dataset_paths(project_root: Path | str = ".") -> DatasetPaths:
 
 
 def _infer_delimiter(path: Path) -> str:
-    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+    with path.open("r", encoding="utf-8-sig", errors="replace", newline="") as handle:
         sample = handle.read(4096)
     return ";" if sample.count(";") >= sample.count(",") else ","
 
 
 def _iter_headered_rows(path: Path, required_columns: list[str]) -> Iterator[dict[str, str]]:
     delimiter = _infer_delimiter(path)
-    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+    with path.open("r", encoding="utf-8-sig", errors="replace", newline="") as handle:
         reader = csv.DictReader(handle, delimiter=delimiter, quotechar='"')
         fieldnames = [_normalize_header(name) for name in (reader.fieldnames or [])]
         row_fieldnames = reader.fieldnames or []
@@ -228,7 +228,7 @@ def _iter_headered_rows(path: Path, required_columns: list[str]) -> Iterator[dic
 
 def _iter_raw_rows(path: Path, column_names: list[str]) -> Iterator[dict[str, str]]:
     delimiter = _infer_delimiter(path)
-    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+    with path.open("r", encoding="utf-8-sig", errors="replace", newline="") as handle:
         reader = csv.reader(handle, delimiter=delimiter, quotechar='"')
         for row in reader:
             if not row:
@@ -241,7 +241,7 @@ def _iter_raw_rows(path: Path, column_names: list[str]) -> Iterator[dict[str, st
 
 def _is_headered(path: Path, expected_columns: list[str]) -> bool:
     delimiter = _infer_delimiter(path)
-    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+    with path.open("r", encoding="utf-8-sig", errors="replace", newline="") as handle:
         reader = csv.reader(handle, delimiter=delimiter, quotechar='"')
         first_row = next(reader, [])
     normalized = {_normalize_header(value) for value in first_row}
@@ -557,4 +557,3 @@ def write_data_contract_report(validation_summary: dict, report_path: Path | str
         )
 
     target.write_text("\n".join(lines) + "\n", encoding="utf-8")
-

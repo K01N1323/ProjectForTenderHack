@@ -1466,8 +1466,6 @@ class TenderHackApiService:
             return "По типу учреждения"
         if codes & {"USER_CATEGORY_AFFINITY", "USER_REPEAT_BUY", "RECENT_SIMILAR_PURCHASE", "SUPPLIER_AFFINITY"}:
             return "На основе ваших закупок"
-        if "REGIONAL_POPULARITY" in codes:
-            return "Популярно в вашем регионе"
         if "SIMILAR_CUSTOMER_POPULARITY" in codes:
             return "Популярно у похожих заказчиков"
         if category_norm and category_norm in session_category_set:

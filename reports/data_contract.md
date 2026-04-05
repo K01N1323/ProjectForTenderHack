@@ -33,14 +33,14 @@
 
 ## Validation Status
 
-- Status: `missing_input`
-- STE path: `None`
-- Contracts path: `None`
+- Status: `ready`
+- STE path: `/Users/eugenytokmakov/Desktop/programming/tenderhack/ProjectForTenderHack/data/processed/ste_catalog_personalization_quick.csv`
+- Contracts path: `/Users/eugenytokmakov/Desktop/programming/tenderhack/ProjectForTenderHack/data/processed/contracts_personalization_quick.csv`
 
 ## Observed STE Dataset
 
-- Rows: 0
-- Unique `ste_id`: 0
+- Rows: 12,575
+- Unique `ste_id`: 12,575
 - Duplicate `ste_id`: 0
 - Missing `ste_id`: 0
 - Missing `clean_name`: 0
@@ -53,9 +53,9 @@
 
 ## Observed Contracts Dataset
 
-- Rows: 0
-- Unique compound keys (`contract_id`, `ste_id`, `customer_inn`): 0
-- Duplicate compound keys: 0
+- Rows: 20,000
+- Unique compound keys (`contract_id`, `ste_id`, `customer_inn`): 19,985
+- Duplicate compound keys: 15
 - Missing `contract_item_name`: 0
 - Missing `contract_id`: 0
 - Missing `ste_id`: 0
@@ -71,8 +71,8 @@
 ## Join Checks
 
 - Join key: `ste_id`
-- Contract rows without STE catalog match: None
-- Catalog STE without contract history: None
+- Contract rows without STE catalog match: 34
+- Catalog STE without contract history: 0
 
 ## Missing Data Notes
 
@@ -85,11 +85,16 @@
 
 ### STE
 
+- `{'ste_id': '1159353', 'clean_name': 'Karcher SV 7 1.439-410.0 паропылесос', 'category': 'Пылесосы', 'attribute_count': 16}`
+- `{'ste_id': '1159612', 'clean_name': 'Bosch BCH6ATH18 пылесос', 'category': 'Пылесосы', 'attribute_count': 14}`
+- `{'ste_id': '1159727', 'clean_name': 'Иглы для бытовых швейных машин "Schmetz", комбинированные, 9 шт', 'category': 'Принадлежности для шитья и рукоделия металлические', 'attribute_count': 20}`
+- `{'ste_id': '1160180', 'clean_name': 'Утюг Vitek VT-1263(B)', 'category': 'Утюги электрические бытовые', 'attribute_count': 10}`
+- `{'ste_id': '1160204', 'clean_name': 'Утюг Maxwell MW-3042(VT)', 'category': 'Утюги электрические бытовые', 'attribute_count': 21}`
 
 ### Contracts
 
-
-## Pending Inputs
-
-- Реальный запуск pipeline заблокирован до появления обоих входных файлов.
-- Второй участник команды должен положить очищенный контрактный датасет в один из ожидаемых путей либо в корень репозитория по маске `Контракты_*.csv`.
+- `{'contract_id': '203255114', 'ste_id': '36047183', 'customer_inn': '7417005438', 'contract_date': '2024-06-05', 'contract_amount': 1200.0}`
+- `{'contract_id': '194452173', 'ste_id': '35778463', 'customer_inn': '5911021660', 'contract_date': '2022-05-26', 'contract_amount': 16800.0}`
+- `{'contract_id': '214274949', 'ste_id': '46358579', 'customer_inn': '5944020101', 'contract_date': '2026-02-11', 'contract_amount': 6825.0}`
+- `{'contract_id': '199009522', 'ste_id': '24120140', 'customer_inn': '8907002558', 'contract_date': '2023-06-17', 'contract_amount': 205000.0}`
+- `{'contract_id': '193681593', 'ste_id': '35754688', 'customer_inn': '8901007006', 'contract_date': '2022-04-01', 'contract_amount': 73130.0}`
