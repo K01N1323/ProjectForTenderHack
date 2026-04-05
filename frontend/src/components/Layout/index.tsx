@@ -39,6 +39,9 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
     const hasHiddenFrequentProducts = frequentProducts.length > visibleFrequentProductsCount;
     const canCollapseFrequentProducts =
         frequentProducts.length > 6 && visibleFrequentProductsCount >= frequentProducts.length;
+    const organizationTypeLabel = user?.organizationTypeLabel?.trim() || 'Общий профиль';
+    const organizationTypeSource = user?.organizationTypeSource?.trim() || 'По истории закупок';
+    const customerName = user?.customerName?.trim() || `ИНН ${user?.inn ?? ''}`;
 
     return (
         <div className="min-h-screen bg-[#f6f7f9] font-sans text-gray-900 flex flex-col">
@@ -88,10 +91,30 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
                                         <div className="absolute right-0 mt-3 w-[420px] max-w-[calc(100vw-32px)] max-h-[min(78vh,680px)] bg-white border border-gray-200 rounded-[8px] shadow-xl p-5 z-50 overflow-y-auto">
                                             <div className="mb-5">
                                                 <div className="text-sm font-semibold text-gray-900">
-                                                    История закупок
+                                                    Профиль заказчика
                                                 </div>
                                                 <div className="text-xs text-gray-500 mt-1">
                                                     Персонализация поиска строится по истории ИНН {user.inn}
+                                                </div>
+                                            </div>
+
+                                            <div className="mb-5 rounded-[10px] border border-[#e6ebf0] bg-[#f8fafc] p-4">
+                                                <div className="text-xs uppercase tracking-wide text-gray-400 mb-2">
+                                                    Тип организации
+                                                </div>
+                                                <div className="text-sm font-semibold text-gray-900 leading-snug">
+                                                    {customerName}
+                                                </div>
+                                                <div className="mt-3 flex flex-wrap gap-2">
+                                                    <span className="inline-flex items-center rounded-full border border-[#d7e3f8] bg-[#eef5ff] px-3 py-1 text-sm font-semibold text-[#2f5e9b]">
+                                                        {organizationTypeLabel}
+                                                    </span>
+                                                    <span className="inline-flex items-center rounded-full border border-[#ebeef2] bg-white px-3 py-1 text-sm text-[#556070]">
+                                                        {user.region || 'Регион не определён'}
+                                                    </span>
+                                                </div>
+                                                <div className="mt-2 text-xs text-gray-500">
+                                                    {organizationTypeSource}
                                                 </div>
                                             </div>
 

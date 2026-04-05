@@ -37,6 +37,7 @@ class ApiTests(unittest.TestCase):
         base_path = Path(cls.temp_dir.name)
         cls.catalog_path = base_path / "catalog.csv"
         cls.raw_catalog_path = base_path / "raw_ste.csv"
+        cls.contracts_path = base_path / "contracts.csv"
         cls.search_db_path = base_path / "search.sqlite"
         cls.preprocessed_db_path = base_path / "preprocessed.sqlite"
         cls.synonyms_path = base_path / "synonyms.json"
@@ -359,6 +360,84 @@ class ApiTests(unittest.TestCase):
                 ]
             )
 
+        with cls.contracts_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.writer(handle, delimiter=";")
+            writer.writerow(
+                [
+                    "Ручка канцелярская синяя",
+                    "contract-1",
+                    "ste-1",
+                    "2025-01-10 10:00:00",
+                    "199.99",
+                    "7701234567",
+                    "ГБОУ Школа № 123",
+                    "Москва",
+                    "1234567890",
+                    "Поставщик 1",
+                    "Москва",
+                ]
+            )
+            writer.writerow(
+                [
+                    "Ручка офисная красная",
+                    "contract-2",
+                    "ste-4",
+                    "2025-01-11 10:00:00",
+                    "219.0",
+                    "7702155262",
+                    "ГБОУ Гимназия № 5",
+                    "Москва",
+                    "8888888888",
+                    "Поставщик 2",
+                    "Москва",
+                ]
+            )
+            writer.writerow(
+                [
+                    "Парацетамол таблетки 500 мг №10",
+                    "contract-3",
+                    "ste-3",
+                    "2025-01-12 10:00:00",
+                    "99.0",
+                    "7707654321",
+                    "ГБУЗ Городская поликлиника № 1",
+                    "Москва",
+                    "7777777777",
+                    "Поставщик 3",
+                    "Москва",
+                ]
+            )
+            writer.writerow(
+                [
+                    "Альбумин человеческий 20 процентов 100 мл",
+                    "contract-4",
+                    "ste-7",
+                    "2025-01-13 10:00:00",
+                    "1390.0",
+                    "7707654322",
+                    "ГБУЗ Клиническая больница № 2",
+                    "Москва",
+                    "1111111111",
+                    "Поставщик 4",
+                    "Москва",
+                ]
+            )
+            writer.writerow(
+                [
+                    "Альбумин человеческий 20 процентов 100 мл",
+                    "contract-5",
+                    "ste-7",
+                    "2025-01-14 10:00:00",
+                    "1390.0",
+                    "7700000001",
+                    "ГБУЗ Городская больница № 10",
+                    "Москва",
+                    "1111111111",
+                    "Поставщик 4",
+                    "Москва",
+                ]
+            )
+
         cls.synonyms_path.write_text(
             json.dumps(
                 {
@@ -539,6 +618,7 @@ class ApiTests(unittest.TestCase):
             search_db_path=cls.search_db_path,
             preprocessed_db_path=cls.preprocessed_db_path,
             synonyms_path=cls.synonyms_path,
+            contracts_path=cls.contracts_path,
             semantic_backend="sqlite",
             raw_ste_catalog_path=cls.raw_catalog_path,
             redis_url="memory://",
@@ -558,6 +638,10 @@ class ApiTests(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload["inn"], "7701234567")
         self.assertEqual(payload["region"], "Москва")
+        self.assertEqual(payload["customerName"], "ГБОУ Школа № 123")
+        self.assertEqual(payload["organizationTypeCode"], "education")
+        self.assertEqual(payload["organizationTypeLabel"], "Образовательная организация")
+        self.assertEqual(payload["organizationTypeSource"], "По наименованию заказчика")
         self.assertTrue(payload["viewedCategories"])
         self.assertTrue(payload["topCategories"])
         self.assertTrue(payload["frequentProducts"])
@@ -572,6 +656,31 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(service.cache_service.backend_name, "memory")
         self.assertIsInstance(cached_payload, dict)
         self.assertEqual(cached_payload["inn"], "7701234567")
+
+    def test_login_falls_back_to_history_based_organization_type(self) -> None:
+        service = self.client.app.state.service
+        cache_key = service.cache_service.build_key(
+            "login",
+            data={"inn": "7702155262", "version": service.LOGIN_CACHE_VERSION},
+        )
+        service.cache_service.delete(cache_key)
+        with patch.object(
+            service.personalization_service,
+            "get_customer_name_context",
+            return_value={
+                "customer_name": "",
+                "institution_name_archetype": "general",
+                "institution_name_archetype_label": "Общий профиль",
+                "institution_name_archetype_scores": {},
+                "name_signal_stems": [],
+                "same_type_peer_inns": [],
+            },
+        ):
+            payload = service.login("7702155262")
+
+        self.assertEqual(payload.organizationTypeCode, "office_admin")
+        self.assertEqual(payload.organizationTypeLabel, "Административная организация")
+        self.assertEqual(payload.organizationTypeSource, "По истории закупок")
 
     def test_runtime_personalization_predictor_returns_reason_codes(self) -> None:
         search_service = SearchService(
@@ -809,11 +918,7 @@ class ApiTests(unittest.TestCase):
             customer_region="Москва",
         )
         merged_session = {
-            "recent_categories": unique_preserve_order(
-                list(server_session.get("recent_categories", []))
-                + list(request_payload["viewedCategories"])
-                + list(request_payload["userContext"]["viewedCategories"])
-            ),
+            "recent_categories": unique_preserve_order(list(server_session.get("recent_categories", []))),
             "clicked_ste_ids": list(server_session.get("clicked_ste_ids", [])),
             "cart_ste_ids": list(server_session.get("cart_ste_ids", [])),
             "bounced_categories": list(server_session.get("bounced_categories", [])),
@@ -849,6 +954,7 @@ class ApiTests(unittest.TestCase):
         baseline_items = baseline.json()["items"]
         self.assertGreaterEqual(len(baseline_items), 2)
         self.assertEqual(baseline_items[0]["id"], "ste-1")
+        baseline_positions = {item["id"]: index for index, item in enumerate(baseline_items)}
 
         event_response = self.client.post(
             "/api/event",
@@ -870,8 +976,714 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(reranked.status_code, 200)
         reranked_items = reranked.json()["items"]
         self.assertGreaterEqual(len(reranked_items), 2)
+        reranked_positions = {item["id"]: index for index, item in enumerate(reranked_items)}
+        ste4_item = next(item for item in reranked_items if item["id"] == "ste-4")
+        self.assertLessEqual(reranked_positions["ste-4"], baseline_positions["ste-4"])
+        self.assertEqual(ste4_item["reasonToShow"], "Продолжить подбор в этой категории")
+
+    def test_first_quick_item_close_is_forgiven_in_session(self) -> None:
+        service = self.client.app.state.service
+
+        first_state = service.online_state_service.record_event(
+            user_id="user-first-bounce",
+            customer_inn="7701234567",
+            customer_region="Москва",
+            event_type="item_close",
+            ste_id="ste-1",
+            category="Ручки канцелярские",
+            duration_ms=1200,
+        )
+        self.assertEqual(first_state["bounced_categories"], [])
+        self.assertEqual(service.interaction_tracker.register_view("user-first-bounce", "Ручки канцелярские", 1200), "forgiven")
+
+        second_state = service.online_state_service.record_event(
+            user_id="user-first-bounce",
+            customer_inn="7701234567",
+            customer_region="Москва",
+            event_type="item_close",
+            ste_id="ste-1",
+            category="Ручки канцелярские",
+            duration_ms=1200,
+        )
+        self.assertIn("ручки канцелярские", second_state["bounced_categories"])
+        self.assertEqual(service.interaction_tracker.register_view("user-first-bounce", "Ручки канцелярские", 1200), "applied")
+
+    def test_item_open_does_not_seed_positive_session_signal(self) -> None:
+        response = self.client.post(
+            "/api/event",
+            json={
+                "userId": "user-open-neutral",
+                "eventType": "item_open",
+                "steId": "ste-4",
+                "category": "Ручки канцелярские",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["recentCategories"], [])
+        self.assertEqual(payload["clickedSteIds"], [])
+        self.assertEqual(payload["itemCloseOutcome"], "none")
+
+    def test_quick_open_close_does_not_boost_search_like_positive_action(self) -> None:
+        dynamic_user_id = "user-quick-close-neutral-search"
+        search_payload = {
+            "query": "руч",
+            "userContext": {
+                "id": dynamic_user_id,
+                "inn": "",
+                "region": "",
+                "viewedCategories": [],
+            },
+            "viewedCategories": [],
+            "bouncedCategories": [],
+            "topK": 5,
+            "min_score": 0.0,
+        }
+
+        baseline = self.client.post("/api/search", json=search_payload)
+        self.assertEqual(baseline.status_code, 200)
+        baseline_items = baseline.json()["items"]
+        self.assertTrue(baseline_items)
+        self.assertEqual(baseline_items[0]["id"], "ste-1")
+
+        open_response = self.client.post(
+            "/api/event",
+            json={
+                "userId": dynamic_user_id,
+                "eventType": "item_open",
+                "steId": "ste-4",
+                "category": "Ручки канцелярские",
+            },
+        )
+        self.assertEqual(open_response.status_code, 200)
+        self.assertEqual(open_response.json()["recentCategories"], [])
+        self.assertEqual(open_response.json()["clickedSteIds"], [])
+
+        close_response = self.client.post(
+            "/api/event",
+            json={
+                "userId": dynamic_user_id,
+                "eventType": "item_close",
+                "steId": "ste-4",
+                "category": "Ручки канцелярские",
+                "durationMs": 900,
+            },
+        )
+        self.assertEqual(close_response.status_code, 200)
+        self.assertEqual(close_response.json()["itemCloseOutcome"], "forgiven")
+        self.assertEqual(close_response.json()["recentCategories"], [])
+        self.assertEqual(close_response.json()["clickedSteIds"], [])
+
+        after_quick_close = self.client.post("/api/search", json=search_payload)
+        self.assertEqual(after_quick_close.status_code, 200)
+        reranked_items = after_quick_close.json()["items"]
+        self.assertTrue(reranked_items)
+        self.assertEqual(reranked_items[0]["id"], "ste-1")
+        self.assertEqual(reranked_items[1]["id"], "ste-4")
+        self.assertIsNone(reranked_items[0]["reasonToShow"])
+        self.assertIsNone(reranked_items[1]["reasonToShow"])
+
+    def test_slow_open_close_creates_positive_session_signal(self) -> None:
+        dynamic_user_id = "user-slow-close-positive-search"
+        search_payload = {
+            "query": "руч",
+            "userContext": {
+                "id": dynamic_user_id,
+                "inn": "",
+                "region": "",
+                "viewedCategories": [],
+            },
+            "viewedCategories": [],
+            "bouncedCategories": [],
+            "topK": 5,
+            "min_score": 0.0,
+        }
+
+        open_response = self.client.post(
+            "/api/event",
+            json={
+                "userId": dynamic_user_id,
+                "eventType": "item_open",
+                "steId": "ste-4",
+                "category": "Ручки канцелярские",
+            },
+        )
+        self.assertEqual(open_response.status_code, 200)
+
+        close_response = self.client.post(
+            "/api/event",
+            json={
+                "userId": dynamic_user_id,
+                "eventType": "item_close",
+                "steId": "ste-4",
+                "category": "Ручки канцелярские",
+                "durationMs": 2500,
+            },
+        )
+        self.assertEqual(close_response.status_code, 200)
+        self.assertEqual(close_response.json()["itemCloseOutcome"], "none")
+        self.assertEqual(close_response.json()["recentCategories"], ["ручки канцелярские"])
+        self.assertEqual(close_response.json()["clickedSteIds"], ["ste-4"])
+
+        after_slow_close = self.client.post("/api/search", json=search_payload)
+        self.assertEqual(after_slow_close.status_code, 200)
+        reranked_items = after_slow_close.json()["items"]
+        self.assertTrue(reranked_items)
         self.assertEqual(reranked_items[0]["id"], "ste-4")
         self.assertEqual(reranked_items[0]["reasonToShow"], "Продолжить подбор в этой категории")
+
+    def test_authenticated_search_ignores_client_bounce_until_server_confirms_it(self) -> None:
+        dynamic_user_id = "user-first-bounce-search"
+        event_response = self.client.post(
+            "/api/event",
+            json={
+                "userId": dynamic_user_id,
+                "inn": "7707654322",
+                "region": "Москва",
+                "eventType": "item_close",
+                "steId": "ste-7",
+                "category": "Плазмозамещающие и перфузионные растворы",
+                "durationMs": 1200,
+            },
+        )
+        self.assertEqual(event_response.status_code, 200)
+        self.assertEqual(event_response.json()["bouncedCategories"], [])
+        self.assertEqual(event_response.json()["itemCloseOutcome"], "forgiven")
+
+        response = self.client.post(
+            "/api/search",
+            json={
+                "query": "аль",
+                "userContext": {
+                    "id": dynamic_user_id,
+                    "inn": "7707654322",
+                    "region": "Москва",
+                    "viewedCategories": [],
+                },
+                "viewedCategories": [],
+                "bouncedCategories": ["Плазмозамещающие и перфузионные растворы"],
+                "topK": 5,
+                "min_score": 0.0,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["items"])
+        self.assertEqual(payload["items"][0]["id"], "ste-7")
+
+    def test_second_quick_item_close_demotes_bounced_category_in_search(self) -> None:
+        dynamic_user_id = "user-second-bounce-search"
+        search_payload = {
+            "query": "аль",
+            "userContext": {
+                "id": dynamic_user_id,
+                "inn": "7707654322",
+                "region": "Москва",
+                "viewedCategories": [],
+            },
+            "viewedCategories": [],
+            "bouncedCategories": [],
+            "topK": 5,
+            "min_score": 0.0,
+        }
+
+        baseline = self.client.post("/api/search", json=search_payload)
+        self.assertEqual(baseline.status_code, 200)
+        self.assertTrue(baseline.json()["items"])
+        self.assertEqual(baseline.json()["items"][0]["id"], "ste-7")
+
+        first_close = self.client.post(
+            "/api/event",
+            json={
+                "userId": dynamic_user_id,
+                "inn": "7707654322",
+                "region": "Москва",
+                "eventType": "item_close",
+                "steId": "ste-7",
+                "category": "Плазмозамещающие и перфузионные растворы",
+                "durationMs": 1200,
+            },
+        )
+        self.assertEqual(first_close.status_code, 200)
+        self.assertEqual(first_close.json()["itemCloseOutcome"], "forgiven")
+        self.assertEqual(first_close.json()["bouncedCategories"], [])
+
+        second_close = self.client.post(
+            "/api/event",
+            json={
+                "userId": dynamic_user_id,
+                "inn": "7707654322",
+                "region": "Москва",
+                "eventType": "item_close",
+                "steId": "ste-7",
+                "category": "Плазмозамещающие и перфузионные растворы",
+                "durationMs": 1200,
+            },
+        )
+        self.assertEqual(second_close.status_code, 200)
+        self.assertEqual(second_close.json()["itemCloseOutcome"], "applied")
+        self.assertIn("плазмозамещающие и перфузионные растворы", second_close.json()["bouncedCategories"])
+
+        reranked = self.client.post("/api/search", json=search_payload)
+        self.assertEqual(reranked.status_code, 200)
+        reranked_items = reranked.json()["items"]
+        self.assertTrue(reranked_items)
+        self.assertNotEqual(reranked_items[0]["id"], "ste-7")
+        self.assertEqual(reranked_items[0]["category"], "Альбомы для рисования")
+        self.assertEqual(reranked_items[-1]["category"], "Плазмозамещающие и перфузионные растворы")
+
+    def test_item_close_above_threshold_is_not_treated_as_quick_skip(self) -> None:
+        dynamic_user_id = "user-slow-close-no-bounce"
+
+        first_close = self.client.post(
+            "/api/event",
+            json={
+                "userId": dynamic_user_id,
+                "inn": "7707654322",
+                "region": "Москва",
+                "eventType": "item_close",
+                "steId": "ste-7",
+                "category": "Плазмозамещающие и перфузионные растворы",
+                "durationMs": 2500,
+            },
+        )
+        self.assertEqual(first_close.status_code, 200)
+        self.assertEqual(first_close.json()["itemCloseOutcome"], "none")
+        self.assertEqual(first_close.json()["bouncedCategories"], [])
+
+        second_close = self.client.post(
+            "/api/event",
+            json={
+                "userId": dynamic_user_id,
+                "inn": "7707654322",
+                "region": "Москва",
+                "eventType": "item_close",
+                "steId": "ste-7",
+                "category": "Плазмозамещающие и перфузионные растворы",
+                "durationMs": 2500,
+            },
+        )
+        self.assertEqual(second_close.status_code, 200)
+        self.assertEqual(second_close.json()["itemCloseOutcome"], "none")
+        self.assertEqual(second_close.json()["bouncedCategories"], [])
+
+    def test_cart_add_keeps_exact_item_in_session_but_not_whole_recent_category(self) -> None:
+        service = self.client.app.state.service
+
+        state = service.online_state_service.record_event(
+            user_id="user-cart-signal",
+            customer_inn="7701234567",
+            customer_region="Москва",
+            event_type="cart_add",
+            ste_id="ste-4",
+            category="Ручки канцелярские",
+        )
+
+        self.assertIn("ste-4", state["cart_ste_ids"])
+        self.assertNotIn("ручки канцелярские", state["recent_categories"])
+
+    def test_cart_add_without_open_card_does_not_suppress_future_quick_close(self) -> None:
+        service = self.client.app.state.service
+        user_id = "user-cart-close-grace"
+
+        add_response = self.client.post(
+            "/api/event",
+            json={
+                "userId": user_id,
+                "inn": "7701234567",
+                "region": "Москва",
+                "eventType": "cart_add",
+                "steId": "ste-4",
+                "category": "Ручки канцелярские",
+            },
+        )
+        self.assertEqual(add_response.status_code, 200)
+
+        close_response = self.client.post(
+            "/api/event",
+            json={
+                "userId": user_id,
+                "inn": "7701234567",
+                "region": "Москва",
+                "eventType": "item_open",
+                "steId": "ste-4",
+                "category": "Ручки канцелярские",
+            },
+        )
+        self.assertEqual(close_response.status_code, 200)
+
+        close_response = self.client.post(
+            "/api/event",
+            json={
+                "userId": user_id,
+                "inn": "7701234567",
+                "region": "Москва",
+                "eventType": "item_close",
+                "steId": "ste-4",
+                "category": "Ручки канцелярские",
+                "durationMs": 900,
+            },
+        )
+        self.assertEqual(close_response.status_code, 200)
+        self.assertEqual(close_response.json()["bouncedCategories"], [])
+        self.assertEqual(close_response.json()["itemCloseOutcome"], "forgiven")
+        self.assertEqual(service.skip_storage.get_skips(user_id, "Ручки канцелярские"), 0)
+
+    def test_quick_close_after_cart_add_in_same_open_session_is_not_counted_as_bounce(self) -> None:
+        service = self.client.app.state.service
+        user_id = "user-post-cart-close-same-open"
+
+        open_response = self.client.post(
+            "/api/event",
+            json={
+                "userId": user_id,
+                "inn": "7701234567",
+                "region": "Москва",
+                "eventType": "item_open",
+                "steId": "ste-4",
+                "category": "Ручки канцелярские",
+            },
+        )
+        self.assertEqual(open_response.status_code, 200)
+
+        add_response = self.client.post(
+            "/api/event",
+            json={
+                "userId": user_id,
+                "inn": "7701234567",
+                "region": "Москва",
+                "eventType": "cart_add",
+                "steId": "ste-4",
+                "category": "Ручки канцелярские",
+            },
+        )
+        self.assertEqual(add_response.status_code, 200)
+
+        close_response = self.client.post(
+            "/api/event",
+            json={
+                "userId": user_id,
+                "inn": "7701234567",
+                "region": "Москва",
+                "eventType": "item_close",
+                "steId": "ste-4",
+                "category": "Ручки канцелярские",
+                "durationMs": 900,
+            },
+        )
+        self.assertEqual(close_response.status_code, 200)
+        self.assertEqual(close_response.json()["bouncedCategories"], [])
+        self.assertEqual(close_response.json()["itemCloseOutcome"], "suppressed")
+        self.assertEqual(service.skip_storage.get_skips(user_id, "Ручки канцелярские"), 0)
+
+    def test_close_marked_after_cart_add_is_not_penalized_even_before_cart_event(self) -> None:
+        service = self.client.app.state.service
+        user_id = "user-close-reason-after-cart"
+
+        close_response = self.client.post(
+            "/api/event",
+            json={
+                "userId": user_id,
+                "inn": "7701234567",
+                "region": "Москва",
+                "eventType": "item_close",
+                "steId": "ste-4",
+                "category": "Ручки канцелярские",
+                "durationMs": 900,
+                "closeReason": "after_cart_add",
+            },
+        )
+        self.assertEqual(close_response.status_code, 200)
+        self.assertEqual(close_response.json()["bouncedCategories"], [])
+        self.assertEqual(close_response.json()["itemCloseOutcome"], "suppressed")
+        self.assertEqual(service.skip_storage.get_skips(user_id, "Ручки канцелярские"), 0)
+
+    def test_cart_context_boost_targets_similar_items_not_whole_category(self) -> None:
+        service = self.client.app.state.service
+        boosted = service._apply_cart_context_boost(
+            [
+                {
+                    "ste_id": "brick-ceramic",
+                    "clean_name": "Кирпич керамический одинарный",
+                    "normalized_name": "кирпич керамический одинарный",
+                    "category": "Кирпичи строительные",
+                    "normalized_category": "кирпичи строительные",
+                    "key_tokens": "кирпич керамический одинарный",
+                    "search_score": 10.0,
+                    "final_score": 10.0,
+                    "top_reason_codes": [],
+                    "reasons": [],
+                },
+                {
+                    "ste_id": "brick-silicate",
+                    "clean_name": "Кирпич силикатный белый",
+                    "normalized_name": "кирпич силикатный белый",
+                    "category": "Кирпичи строительные",
+                    "normalized_category": "кирпичи строительные",
+                    "key_tokens": "кирпич силикатный белый",
+                    "search_score": 10.0,
+                    "final_score": 10.0,
+                    "top_reason_codes": [],
+                    "reasons": [],
+                },
+                {
+                    "ste_id": "block-gas",
+                    "clean_name": "Блок газобетонный стеновой",
+                    "normalized_name": "блок газобетонный стеновой",
+                    "category": "Блоки строительные",
+                    "normalized_category": "блоки строительные",
+                    "key_tokens": "блок газобетонный стеновой",
+                    "search_score": 10.0,
+                    "final_score": 10.0,
+                    "top_reason_codes": [],
+                    "reasons": [],
+                },
+            ],
+            query="кирпич",
+            cart_items=[
+                {
+                    "ste_id": "brick-cart",
+                    "clean_name": "Кирпич керамический лицевой",
+                    "normalized_name": "кирпич керамический лицевой",
+                    "category": "Кирпичи строительные",
+                    "normalized_category": "кирпичи строительные",
+                    "key_tokens": "кирпич керамический лицевой",
+                }
+            ],
+        )
+
+        by_id = {item["ste_id"]: item for item in boosted}
+        self.assertIn("cart_context_boost", by_id["brick-ceramic"])
+        self.assertIn("cart_context_multiplier", by_id["brick-ceramic"])
+        self.assertGreater(by_id["brick-ceramic"]["final_score"], 10.0)
+        self.assertLessEqual(by_id["brick-ceramic"]["cart_context_multiplier"], 1.1)
+        self.assertNotIn("cart_context_boost", by_id["brick-silicate"])
+        self.assertNotIn("cart_context_boost", by_id["block-gas"])
+
+    def test_cart_context_does_not_take_over_generic_query_family(self) -> None:
+        service = self.client.app.state.service
+        boosted = service._apply_cart_context_boost(
+            [
+                {
+                    "ste_id": "lamp-1",
+                    "clean_name": "Лампа светодиодная настольная",
+                    "normalized_name": "лампа светодиодная настольная",
+                    "category": "Лампы световые",
+                    "normalized_category": "лампы световые",
+                    "key_tokens": "лампа светодиодная настольная",
+                    "search_score": 10.0,
+                    "final_score": 10.0,
+                    "top_reason_codes": [],
+                    "reasons": [],
+                },
+                {
+                    "ste_id": "garland-1",
+                    "clean_name": "Гирлянда светодиодная уличная",
+                    "normalized_name": "гирлянда светодиодная уличная",
+                    "category": "Гирлянды световые",
+                    "normalized_category": "гирлянды световые",
+                    "key_tokens": "гирлянда светодиодная уличная",
+                    "search_score": 10.0,
+                    "final_score": 10.0,
+                    "top_reason_codes": [],
+                    "reasons": [],
+                },
+                {
+                    "ste_id": "lamp-2",
+                    "clean_name": "Лампа потолочная светодиодная",
+                    "normalized_name": "лампа потолочная светодиодная",
+                    "category": "Лампы световые",
+                    "normalized_category": "лампы световые",
+                    "key_tokens": "лампа потолочная светодиодная",
+                    "search_score": 10.0,
+                    "final_score": 10.0,
+                    "top_reason_codes": [],
+                    "reasons": [],
+                },
+                {
+                    "ste_id": "garland-2",
+                    "clean_name": "Гирлянда комнатная декоративная",
+                    "normalized_name": "гирлянда комнатная декоративная",
+                    "category": "Гирлянды световые",
+                    "normalized_category": "гирлянды световые",
+                    "key_tokens": "гирлянда комнатная декоративная свет",
+                    "search_score": 10.0,
+                    "final_score": 10.0,
+                    "top_reason_codes": [],
+                    "reasons": [],
+                },
+                {
+                    "ste_id": "lamp-3",
+                    "clean_name": "Лампа подвесная светодиодная",
+                    "normalized_name": "лампа подвесная светодиодная",
+                    "category": "Лампы световые",
+                    "normalized_category": "лампы световые",
+                    "key_tokens": "лампа подвесная светодиодная",
+                    "search_score": 10.0,
+                    "final_score": 10.0,
+                    "top_reason_codes": [],
+                    "reasons": [],
+                },
+            ],
+            query="свет",
+            cart_items=[
+                {
+                    "ste_id": "lamp-cart",
+                    "clean_name": "Лампа светодиодная",
+                    "normalized_name": "лампа светодиодная",
+                    "category": "Лампы световые",
+                    "normalized_category": "лампы световые",
+                    "key_tokens": "лампа светодиодная",
+                }
+            ],
+        )
+
+        boosted_ids = [item["ste_id"] for item in boosted if "cart_context_boost" in item]
+        self.assertEqual(boosted_ids, [])
+        ordered_ids = [item["ste_id"] for item in boosted]
+        self.assertIn("garland-1", ordered_ids[:4])
+        self.assertIn("garland-2", ordered_ids[:4])
+
+    def test_cart_context_boost_caps_number_of_similar_siblings(self) -> None:
+        service = self.client.app.state.service
+        boosted = service._apply_cart_context_boost(
+            [
+                {
+                    "ste_id": "brick-ceramic-1",
+                    "clean_name": "Кирпич керамический пустотелый",
+                    "normalized_name": "кирпич керамический пустотелый",
+                    "category": "Кирпичи строительные",
+                    "normalized_category": "кирпичи строительные",
+                    "key_tokens": "кирпич керамический пустотелый",
+                    "search_score": 10.0,
+                    "final_score": 10.0,
+                    "top_reason_codes": [],
+                    "reasons": [],
+                },
+                {
+                    "ste_id": "brick-silicate-1",
+                    "clean_name": "Кирпич силикатный белый",
+                    "normalized_name": "кирпич силикатный белый",
+                    "category": "Кирпичи строительные",
+                    "normalized_category": "кирпичи строительные",
+                    "key_tokens": "кирпич силикатный белый",
+                    "search_score": 10.0,
+                    "final_score": 10.0,
+                    "top_reason_codes": [],
+                    "reasons": [],
+                },
+                {
+                    "ste_id": "brick-ceramic-2",
+                    "clean_name": "Кирпич керамический облицовочный",
+                    "normalized_name": "кирпич керамический облицовочный",
+                    "category": "Кирпичи строительные",
+                    "normalized_category": "кирпичи строительные",
+                    "key_tokens": "кирпич керамический облицовочный",
+                    "search_score": 10.0,
+                    "final_score": 10.0,
+                    "top_reason_codes": [],
+                    "reasons": [],
+                },
+                {
+                    "ste_id": "brick-silicate-2",
+                    "clean_name": "Кирпич силикатный строительный",
+                    "normalized_name": "кирпич силикатный строительный",
+                    "category": "Кирпичи строительные",
+                    "normalized_category": "кирпичи строительные",
+                    "key_tokens": "кирпич силикатный строительный",
+                    "search_score": 10.0,
+                    "final_score": 10.0,
+                    "top_reason_codes": [],
+                    "reasons": [],
+                },
+                {
+                    "ste_id": "brick-ceramic-3",
+                    "clean_name": "Кирпич керамический рядовой",
+                    "normalized_name": "кирпич керамический рядовой",
+                    "category": "Кирпичи строительные",
+                    "normalized_category": "кирпичи строительные",
+                    "key_tokens": "кирпич керамический рядовой",
+                    "search_score": 10.0,
+                    "final_score": 10.0,
+                    "top_reason_codes": [],
+                    "reasons": [],
+                },
+                {
+                    "ste_id": "brick-ceramic-4",
+                    "clean_name": "Кирпич керамический полнотелый",
+                    "normalized_name": "кирпич керамический полнотелый",
+                    "category": "Кирпичи строительные",
+                    "normalized_category": "кирпичи строительные",
+                    "key_tokens": "кирпич керамический полнотелый",
+                    "search_score": 10.0,
+                    "final_score": 10.0,
+                    "top_reason_codes": [],
+                    "reasons": [],
+                },
+            ],
+            query="кирпич",
+            cart_items=[
+                {
+                    "ste_id": "brick-cart",
+                    "clean_name": "Кирпич керамический лицевой",
+                    "normalized_name": "кирпич керамический лицевой",
+                    "category": "Кирпичи строительные",
+                    "normalized_category": "кирпичи строительные",
+                    "key_tokens": "кирпич керамический лицевой",
+                }
+            ],
+        )
+
+        boosted_ids = [item["ste_id"] for item in boosted if "cart_context_boost" in item]
+        self.assertLessEqual(len(boosted_ids), service.MAX_CART_CONTEXT_BOOSTED_RESULTS)
+        self.assertIn("brick-silicate-1", [item["ste_id"] for item in boosted[:4]])
+
+    def test_session_category_context_no_longer_dominates_generic_search(self) -> None:
+        runtime_service = self.client.app.state.service.personalization_runtime_service
+        reranked = runtime_service.rerank_candidates(
+            query="свет",
+            candidates=[
+                {
+                    "ste_id": "lamp-1",
+                    "clean_name": "Лампа светодиодная настольная",
+                    "normalized_name": "лампа светодиодная настольная",
+                    "category": "Лампы световые",
+                    "normalized_category": "лампы световые",
+                    "search_score": 8.3,
+                },
+                {
+                    "ste_id": "garland-1",
+                    "clean_name": "Гирлянда декоративная световая",
+                    "normalized_name": "гирлянда декоративная световая",
+                    "category": "Гирлянды световые",
+                    "normalized_category": "гирлянды световые",
+                    "search_score": 9.1,
+                },
+                {
+                    "ste_id": "lamp-2",
+                    "clean_name": "Лампа потолочная светодиодная",
+                    "normalized_name": "лампа потолочная светодиодная",
+                    "category": "Лампы световые",
+                    "normalized_category": "лампы световые",
+                    "search_score": 8.6,
+                },
+            ],
+            user_id="user-session-generic",
+            customer_inn=None,
+            customer_region="Москва",
+            session_categories=["Лампы световые"],
+            session_state={
+                "clicked_ste_ids": [],
+                "cart_ste_ids": [],
+                "recent_categories": ["Лампы световые"],
+                "bounced_categories": [],
+            },
+        )
+
+        self.assertEqual(reranked[0]["ste_id"], "garland-1")
+        lamp_item = next(item for item in reranked if item["ste_id"] == "lamp-2")
+        self.assertEqual(lamp_item["session_priority"], 0.0)
+        self.assertLess(lamp_item["final_score"], reranked[0]["final_score"])
 
     def test_search_returns_corrected_query(self) -> None:
         response = self.client.post(
@@ -917,14 +1729,14 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(len(second_payload["items"]), 1)
         self.assertNotEqual(first_payload["items"][0]["id"], second_payload["items"][0]["id"])
 
-    def test_search_short_prefix_can_surface_same_type_professional_item(self) -> None:
+    def test_search_short_prefix_can_surface_same_type_item_from_customer_name(self) -> None:
         response = self.client.post(
             "/api/search",
             json={
                 "query": "аль",
                 "userContext": {
-                    "id": "user-7707654321",
-                    "inn": "7707654321",
+                    "id": "user-7700000001",
+                    "inn": "7700000001",
                     "region": "Москва",
                     "viewedCategories": [],
                 },
@@ -1174,12 +1986,12 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(payload[0]["type"], "correction")
         self.assertEqual(payload[0]["reason"], "Исправление запроса")
 
-    def test_suggestions_prioritize_same_type_professional_prefix_products(self) -> None:
+    def test_suggestions_prioritize_same_type_products_from_customer_name(self) -> None:
         response = self.client.get(
             "/api/search/suggestions",
             params={
                 "q": "аль",
-                "inn": "7707654321",
+                "inn": "7700000001",
             },
         )
         self.assertEqual(response.status_code, 200)
@@ -1343,6 +2155,51 @@ class ApiTests(unittest.TestCase):
 
         self.assertEqual(len(deduped), 1)
         self.assertEqual(deduped[0].text.lower(), "колбаса сервелат варено копченая")
+
+    def test_abstract_suggestions_can_reorder_query_tokens_from_result_name(self) -> None:
+        service = self.client.app.state.service
+
+        suggestions = service._build_abstract_suggestions(
+            query="алгебра макарычев",
+            query_payload={
+                "expanded_tokens": ["алгебра", "макарычев"],
+                "corrected_query": "алгебра макарычев",
+                "applied_synonyms": [],
+            },
+            results=[
+                {
+                    "clean_name": "Макарычев Алгебра. 8 класс. Углублённый уровень.",
+                    "category": "Учебники печатные общеобразовательного назначения",
+                }
+            ],
+        )
+
+        suggestion_texts = [item.text.lower() for item in suggestions]
+        self.assertIn("макарычев алгебра", suggestion_texts)
+
+    def test_abstract_suggestions_can_extract_query_tokens_in_result_order(self) -> None:
+        service = self.client.app.state.service
+
+        suggestions = service._build_abstract_suggestions(
+            query="макарычев алгебра",
+            query_payload={
+                "expanded_tokens": ["макарычев", "алгебра"],
+                "corrected_query": "макарычев алгебра",
+                "applied_synonyms": [],
+            },
+            results=[
+                {
+                    "clean_name": (
+                        "Учебник. Математика. Алгебра. 8 класс. Углублённый уровень. "
+                        "Макарычев Ю. Н., Миндюк Н. Г."
+                    ),
+                    "category": "Учебники печатные общеобразовательного назначения",
+                }
+            ],
+        )
+
+        suggestion_texts = [item.text.lower() for item in suggestions]
+        self.assertIn("алгебра макарычев", suggestion_texts)
 
     def test_completion_suggestions_surface_multiple_prefix_families(self) -> None:
         service = self.client.app.state.service

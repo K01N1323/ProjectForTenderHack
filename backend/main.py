@@ -26,7 +26,7 @@ from tenderhack.descriptions import CatalogDescriptionService
 from tenderhack.online_state import OnlineStateService
 from tenderhack.offers import OfferLookupService
 from tenderhack.penalization import InMemorySkipStorage, InteractionTracker, RankingModifier
-from tenderhack.personalization import PersonalizationService
+from tenderhack.personalization import INSTITUTION_ARCHETYPE_PROFILE_LABELS, PersonalizationService
 from tenderhack.personalization_runtime import PersonalizationRuntimeService
 from tenderhack.search import SearchService
 from tenderhack.search_rerank_model import SearchRerankPredictor
@@ -59,11 +59,25 @@ def _default_synonyms_path() -> Path:
     return PROJECT_ROOT / "data" / "reference" / "search_synonyms.json"
 
 
+def _default_contracts_path() -> Path:
+    candidates = [
+        PROJECT_ROOT / "data" / "processed" / "contracts_clean.csv",
+        PROJECT_ROOT / "data" / "processed" / "contracts_flat.csv",
+        PROJECT_ROOT / "data" / "processed" / "contracts.csv",
+    ]
+    candidates.extend(sorted(PROJECT_ROOT.glob("Контракты_*.csv")))
+    for path in candidates:
+        if path.exists():
+            return path
+    return PROJECT_ROOT / "Контракты_20260403.csv"
+
+
 @dataclass
 class AppSettings:
     search_db_path: Path = PROJECT_ROOT / "data" / "processed" / "tenderhack_search.sqlite"
     preprocessed_db_path: Path = PROJECT_ROOT / "data" / "processed" / "tenderhack_preprocessed.sqlite"
     synonyms_path: Path = _default_synonyms_path()
+    contracts_path: Path = _default_contracts_path()
     fasttext_model_path: Path = PROJECT_ROOT / "data" / "processed" / "tenderhack_fasttext.bin"
     personalization_model_path: Path = PROJECT_ROOT / "artifacts" / "personalization_model.cbm"
     search_rerank_enabled: bool = True
@@ -85,6 +99,7 @@ class AppSettings:
             search_db_path=_env_path("TENDERHACK_SEARCH_DB", cls.search_db_path),
             preprocessed_db_path=_env_path("TENDERHACK_PREPROCESSED_DB", cls.preprocessed_db_path),
             synonyms_path=_env_path("TENDERHACK_SYNONYMS_PATH", cls.synonyms_path),
+            contracts_path=_env_path("TENDERHACK_CONTRACTS_PATH", cls.contracts_path),
             fasttext_model_path=_env_path("TENDERHACK_FASTTEXT_MODEL_PATH", cls.fasttext_model_path),
             personalization_model_path=_env_path("TENDERHACK_PERSONALIZATION_MODEL_PATH", cls.personalization_model_path),
             search_rerank_enabled=_env_bool("TENDERHACK_SEARCH_RERANK_ENABLED", cls.search_rerank_enabled),
@@ -120,6 +135,10 @@ class UserPayload(BaseModel):
     id: str
     inn: str
     region: str
+    customerName: Optional[str] = None
+    organizationTypeCode: Optional[str] = None
+    organizationTypeLabel: Optional[str] = None
+    organizationTypeSource: Optional[str] = None
     viewedCategories: List[str] = Field(default_factory=list)
     topCategories: List[dict] = Field(default_factory=list)
     frequentProducts: List[dict] = Field(default_factory=list)
@@ -186,6 +205,7 @@ class EventRequest(BaseModel):
     steId: Optional[str] = None
     category: Optional[str] = None
     durationMs: Optional[int] = Field(default=None, ge=0)
+    closeReason: Optional[Literal["dismiss", "after_cart_add"]] = None
 
 
 class EventResponsePayload(BaseModel):
@@ -196,18 +216,21 @@ class EventResponsePayload(BaseModel):
     clickedSteIds: List[str] = Field(default_factory=list)
     cartSteIds: List[str] = Field(default_factory=list)
     bouncedCategories: List[str] = Field(default_factory=list)
+    itemCloseOutcome: Literal["none", "forgiven", "applied", "suppressed"] = "none"
 
 
 class TenderHackApiService:
-    LOGIN_CACHE_VERSION = 7
-    SEARCH_CACHE_VERSION = 9
-    SUGGESTIONS_CACHE_VERSION = 25
+    LOGIN_CACHE_VERSION = 9
+    SEARCH_CACHE_VERSION = 11
+    SUGGESTIONS_CACHE_VERSION = 26
     PROFILE_TOP_CATEGORIES_LIMIT = 6
     PROFILE_FREQUENT_PRODUCTS_LIMIT = 18
     MAX_HISTORY_CATEGORY_SUGGESTIONS = 1
     MAX_HISTORY_REASON_SUGGESTIONS = 3
     MAX_INSTITUTION_TYPE_SUGGESTIONS = 3
     MIN_QUERY_COMPLETION_SUGGESTIONS = 3
+    MAX_CART_CONTEXT_BOOSTED_RESULTS = 3
+    MAX_CART_CONTEXT_SIGNATURE_RESULT_SHARE = 0.45
     _SUGGESTION_TYPE_PRIORITY = {
         "correction": 4,
         "product": 3,
@@ -230,7 +253,10 @@ class TenderHackApiService:
             semantic_backend=settings.semantic_backend,
             fasttext_model_path=settings.fasttext_model_path,
         )
-        self.personalization_service = PersonalizationService(db_path=settings.preprocessed_db_path)
+        self.personalization_service = PersonalizationService(
+            db_path=settings.preprocessed_db_path,
+            contracts_path=settings.contracts_path,
+        )
         self.user_profile_scorer = UserProfileScorer(SQLiteUserHistoryRepository(self.personalization_service.conn))
         self.personalization_runtime_service = PersonalizationRuntimeService(
             db_path=settings.preprocessed_db_path,
@@ -277,6 +303,48 @@ class TenderHackApiService:
                 "Missing required search assets:\n" + "\n".join(f"- {path}" for path in missing)
             )
 
+    @staticmethod
+    def _resolve_organization_type_payload(*, profile: dict, customer_name_context: dict) -> dict:
+        name_code = str(customer_name_context.get("institution_name_archetype") or "").strip()
+        name_label = str(customer_name_context.get("institution_name_archetype_label") or "").strip()
+        history_code = str(profile.get("institution_archetype") or "").strip()
+        history_label = INSTITUTION_ARCHETYPE_PROFILE_LABELS.get(
+            history_code,
+            INSTITUTION_ARCHETYPE_PROFILE_LABELS["general"],
+        )
+
+        if name_code and name_code != "general":
+            return {
+                "organizationTypeCode": name_code,
+                "organizationTypeLabel": name_label or INSTITUTION_ARCHETYPE_PROFILE_LABELS.get(
+                    name_code,
+                    INSTITUTION_ARCHETYPE_PROFILE_LABELS["general"],
+                ),
+                "organizationTypeSource": "По наименованию заказчика",
+            }
+
+        if history_code and history_code != "general":
+            return {
+                "organizationTypeCode": history_code,
+                "organizationTypeLabel": history_label,
+                "organizationTypeSource": "По истории закупок",
+            }
+
+        fallback_code = name_code or history_code or "general"
+        fallback_label = (
+            name_label
+            or INSTITUTION_ARCHETYPE_PROFILE_LABELS.get(
+                fallback_code,
+                INSTITUTION_ARCHETYPE_PROFILE_LABELS["general"],
+            )
+        )
+        fallback_source = "По наименованию заказчика" if customer_name_context.get("customer_name") else "По истории закупок"
+        return {
+            "organizationTypeCode": fallback_code,
+            "organizationTypeLabel": fallback_label,
+            "organizationTypeSource": fallback_source,
+        }
+
     def login(self, inn: str) -> UserPayload:
         cache_key = self.cache_service.build_key(
             "login",
@@ -289,6 +357,11 @@ class TenderHackApiService:
         profile = self.personalization_service.build_customer_profile(
             customer_inn=inn,
             top_ste=self.PROFILE_FREQUENT_PRODUCTS_LIMIT,
+        )
+        customer_name_context = self.personalization_service.get_customer_name_context(inn)
+        organization_type_payload = self._resolve_organization_type_payload(
+            profile=profile,
+            customer_name_context=customer_name_context,
         )
         recommended_categories = list(profile.get("recommended_categories") or profile.get("top_categories") or [])
         recommended_ste = list(profile.get("recommended_ste") or profile.get("top_ste") or [])
@@ -305,6 +378,10 @@ class TenderHackApiService:
             id=f"user-{inn}",
             inn=inn,
             region=region,
+            customerName=str(customer_name_context.get("customer_name") or "") or None,
+            organizationTypeCode=str(organization_type_payload.get("organizationTypeCode") or "") or None,
+            organizationTypeLabel=str(organization_type_payload.get("organizationTypeLabel") or "") or None,
+            organizationTypeSource=str(organization_type_payload.get("organizationTypeSource") or "") or None,
             viewedCategories=viewed_categories,
             topCategories=[
                 {
@@ -376,14 +453,27 @@ class TenderHackApiService:
             customer_inn=user_context.inn,
             customer_region=user_context.region,
         )
-        session_categories = unique_preserve_order(
-            list(server_session.get("recent_categories", [])) + payload.viewedCategories + user_context.viewedCategories
-        )
-        bounced_categories = {
+        if user_context.id or user_context.inn:
+            session_categories = unique_preserve_order(
+                [str(value) for value in server_session.get("recent_categories", []) if value]
+            )
+        else:
+            session_categories = unique_preserve_order(
+                list(server_session.get("recent_categories", [])) + payload.viewedCategories + user_context.viewedCategories
+            )
+        server_bounced_categories = {
             normalize_text(value)
-            for value in [*server_session.get("bounced_categories", []), *payload.bouncedCategories]
+            for value in server_session.get("bounced_categories", [])
             if value
         }
+        if user_context.id or user_context.inn:
+            bounced_categories = server_bounced_categories
+        else:
+            bounced_categories = {
+                normalize_text(value)
+                for value in [*server_session.get("bounced_categories", []), *payload.bouncedCategories]
+                if value
+            }
         merged_session_state = {
             "recent_categories": session_categories,
             "clicked_ste_ids": list(server_session.get("clicked_ste_ids", [])),
@@ -450,10 +540,11 @@ class TenderHackApiService:
                 item["top_reason_codes"] = []
                 item["reasons"] = ["оставлено выше за счёт базовой текстовой релевантности"]
 
-        # Шаг 1: мягкий буст за категории из корзины
-        results = self.cart_boost_modifier.apply_boost(
-            recommendations=results,
-            user_id=user_context.id or (f"user-{user_context.inn}" if user_context.inn else "anonymous"),
+        # Шаг 1: точечный буст за конкретные товары в корзине и их близкие аналоги.
+        results = self._apply_cart_context_boost(
+            results,
+            query=payload.query,
+            cart_items=self._load_cart_context_items(list(merged_session_state.get("cart_ste_ids", []))),
         )
 
         # Шаг 2: эвристическая пессимизация (штраф за быстрый отказ)
@@ -473,6 +564,7 @@ class TenderHackApiService:
 
         results.sort(
             key=lambda item: (
+                0 if item.get("reason_to_hide") else 1,
                 float(item.get("session_priority", 0.0)),
                 float(item.get("final_score", item.get("search_score", 0.0))),
                 float(item.get("search_score", 0.0)),
@@ -541,18 +633,6 @@ class TenderHackApiService:
 
     def record_event(self, payload: EventRequest) -> EventResponsePayload:
         resolved_user_id = payload.userId or (f"user-{payload.inn}" if payload.inn else "anonymous")
-        if payload.eventType == "item_close" and payload.category:
-            self.interaction_tracker.register_view(
-                user_id=resolved_user_id,
-                category_id=str(payload.category),
-                dwell_time_ms=payload.durationMs or 0,
-            )
-
-        # Трекинг корзины: обновляем счётчик добавлений/удалений по категории
-        if payload.eventType == "cart_add" and payload.category:
-            self.cart_storage.increment_cart(resolved_user_id, str(payload.category))
-        elif payload.eventType == "cart_remove" and payload.category:
-            self.cart_storage.decrement_cart(resolved_user_id, str(payload.category))
         session_state = self.online_state_service.record_event(
             user_id=resolved_user_id,
             customer_inn=payload.inn,
@@ -561,7 +641,18 @@ class TenderHackApiService:
             ste_id=payload.steId,
             category=payload.category,
             duration_ms=payload.durationMs,
+            close_reason=payload.closeReason,
         )
+        item_close_outcome: Literal["none", "forgiven", "applied", "suppressed"] = "none"
+        if payload.eventType == "item_close":
+            if session_state.get("last_item_close_suppressed"):
+                item_close_outcome = "suppressed"
+            elif payload.category:
+                item_close_outcome = self.interaction_tracker.register_view(
+                    user_id=resolved_user_id,
+                    category_id=str(payload.category),
+                    dwell_time_ms=payload.durationMs or 0,
+                )
         return EventResponsePayload(
             status="ok",
             userId=resolved_user_id,
@@ -570,6 +661,7 @@ class TenderHackApiService:
             clickedSteIds=[str(value) for value in session_state.get("clicked_ste_ids", [])],
             cartSteIds=[str(value) for value in session_state.get("cart_ste_ids", [])],
             bouncedCategories=[str(value) for value in session_state.get("bounced_categories", [])],
+            itemCloseOutcome=item_close_outcome,
         )
 
     def suggestions(
@@ -830,6 +922,33 @@ class TenderHackApiService:
             return ""
         return " ".join(phrase_tokens)
 
+    @classmethod
+    def _matched_query_token_phrase(cls, *, source_text: str, query: str) -> str:
+        query_stems = unique_preserve_order(
+            stem_token(token)
+            for token in cls._significant_tokens(query)
+            if stem_token(token)
+        )
+        if len(query_stems) < 2:
+            return ""
+
+        matched_tokens: List[str] = []
+        matched_stems: set[str] = set()
+        for token in cls._significant_tokens(source_text):
+            token_stem = stem_token(token)
+            if not token_stem or token_stem not in query_stems or token_stem in matched_stems:
+                continue
+            matched_tokens.append(token)
+            matched_stems.add(token_stem)
+
+        if len(matched_stems) < len(query_stems):
+            return ""
+
+        phrase = " ".join(matched_tokens)
+        if not phrase:
+            return ""
+        return phrase[:1].upper() + phrase[1:]
+
     @staticmethod
     def _compact_category_phrase(category: str) -> str:
         category_tokens = [token for token in tokenize(category) if not token.isdigit()]
@@ -983,23 +1102,26 @@ class TenderHackApiService:
                 )
 
         for item in results:
-            name_phrase = cls._abstract_name_phrase(str(item.get("clean_name") or ""), query)
+            clean_name = str(item.get("clean_name") or "")
+            matched_query_phrase = cls._matched_query_token_phrase(source_text=clean_name, query=query)
+            name_phrase = cls._abstract_name_phrase(clean_name, query)
             category_phrase = cls._compact_category_phrase(str(item.get("category") or ""))
 
-            for candidate in [name_phrase, category_phrase]:
+            for candidate, suggestion_type, force_include in [
+                (matched_query_phrase, "query", True),
+                (name_phrase, "query", False),
+                (category_phrase, "category", False),
+            ]:
                 candidate_norm = normalize_text(candidate)
                 if not candidate_norm or candidate_norm == query_norm:
                     continue
-                if query_tokens and not any(
+                if not force_include and query_tokens and not any(
                     token.startswith(query_norm) or query_norm.startswith(token[: max(2, min(len(token), len(query_norm)))])
                     for token in cls._significant_tokens(candidate)
                 ):
                     continue
                 score = cls._token_prefix_match_score(query, candidate)
                 if score > 0:
-                    suggestion_type: Literal["product", "category", "correction", "query"] = (
-                        "category" if candidate == category_phrase else "query"
-                    )
                     reason = "Популярная категория" if suggestion_type == "category" else "Продолжение запроса"
                     ranked_suggestions.append(
                         cls._build_suggestion(
@@ -1252,7 +1374,7 @@ class TenderHackApiService:
         cache_key = self.cache_service.build_key(
             "same_type_prefix_products",
             data={
-                "version": 3,
+                "version": 4,
                 "inn": user_inn,
                 "query": query_norm,
             },
@@ -1262,13 +1384,13 @@ class TenderHackApiService:
             return [item for item in cached_payload if isinstance(item, dict)]
 
         try:
-            profile = self.personalization_service.build_customer_profile(customer_inn=user_inn, top_ste=200)
+            name_context = self.personalization_service.get_customer_name_context(user_inn, limit=180)
         except Exception:
             return []
 
-        same_type_peer_inns = [str(value) for value in profile.get("same_type_peer_inns", []) if value]
-        archetype = str(profile.get("institution_archetype") or "general")
-        if not same_type_peer_inns and archetype == "general":
+        same_type_peer_inns = [str(value) for value in name_context.get("same_type_peer_inns", []) if value]
+        archetype = str(name_context.get("institution_name_archetype") or "general")
+        if not same_type_peer_inns or archetype == "general":
             return []
 
         candidate_rows = self.search_service.conn.execute(
@@ -1288,41 +1410,10 @@ class TenderHackApiService:
         same_type_stats = self._load_same_type_prefix_stats(
             ste_ids=candidate_ids,
             peer_inns=same_type_peer_inns,
-            archetype_categories=list(profile.get("archetype_categories") or []),
             customer_inn=user_inn,
         )
         if not same_type_stats:
             return []
-
-        archetype_categories: set[str] = set()
-        category_recommendation_scores: dict[str, float] = {}
-        profile_category_codes = set()
-        for item in profile.get("recommended_categories", []):
-            category_norm = normalize_text(str(item.get("category") or item.get("normalized_category") or ""))
-            recommendation_score = float(item.get("recommendation_score") or item.get("weight") or 0.0)
-            if not category_norm or recommendation_score < 2.0:
-                continue
-            category_recommendation_scores[category_norm] = max(
-                category_recommendation_scores.get(category_norm, 0.0),
-                recommendation_score,
-            )
-            profile_category_codes.update(self._extract_category_codes(category_norm))
-        for item in profile.get("archetype_categories", []):
-            category_norm = normalize_text(str(item.get("category") or item.get("normalized_category") or ""))
-            archetype_weight = float(item.get("weight") or item.get("recommendation_score") or 0.0)
-            if not category_norm or archetype_weight < 0.35:
-                continue
-            archetype_categories.add(category_norm)
-            category_recommendation_scores[category_norm] = max(
-                category_recommendation_scores.get(category_norm, 0.0),
-                archetype_weight,
-            )
-            profile_category_codes.update(self._extract_category_codes(category_norm))
-        recommended_by_ste = {
-            str(item.get("ste_id") or ""): float(item.get("recommendation_score") or 0.0)
-            for item in profile.get("recommended_ste", [])
-            if item.get("ste_id")
-        }
 
         ranked_products: List[dict] = []
         for row in candidate_rows:
@@ -1339,20 +1430,16 @@ class TenderHackApiService:
             if prefix_score <= 0:
                 continue
             category_norm = normalize_text(str(row["category"] or row["normalized_category"] or ""))
-            exact_category_score = float(category_recommendation_scores.get(category_norm, 0.0))
-            candidate_codes = self._extract_category_codes(category_norm)
-            code_match_score = self._category_code_match_score(candidate_codes, profile_category_codes)
-            code_boost = 14.0 * code_match_score
-            category_boost = 0.0
-            if category_norm and category_norm in archetype_categories:
-                category_boost = 12.0
-            elif exact_category_score > 0:
-                category_boost = min(10.0, exact_category_score * 1.8)
-            recommendation_score = recommended_by_ste.get(ste_id, 0.0)
             same_type_count = float(stats.get("purchase_count", 0.0) or 0.0)
             global_count = max(same_type_count, float(stats.get("global_purchase_count", 0.0) or 0.0))
             specificity = same_type_count / global_count if global_count > 0 else 0.0
-            type_relevance_score = max(category_boost, code_boost)
+            type_relevance_score = self.personalization_service.customer_name_archetype_match_score(
+                archetype=archetype,
+                texts=[
+                    str(row["clean_name"] or ""),
+                    str(row["category"] or row["normalized_category"] or ""),
+                ],
+            )
             if specificity < 0.20 and type_relevance_score <= 0:
                 continue
             # For very short prefixes we only keep broadly-supported items when they are
@@ -1364,7 +1451,7 @@ class TenderHackApiService:
 
             popularity_score = min(14.0, 2.5 * math.log1p(same_type_count))
             specificity_score = 18.0 * specificity
-            peer_recommendation_boost = min(6.0, recommendation_score)
+            type_relevance_boost = 10.0 * type_relevance_score
             generic_penalty = 10.0 if len(query_norm) <= 4 and type_relevance_score <= 0 else 0.0
             ranked_products.append(
                 {
@@ -1373,14 +1460,12 @@ class TenderHackApiService:
                     "category": str(row["category"] or ""),
                     "purchaseCount": int(same_type_count),
                     "totalAmount": round(float(stats.get("total_amount", 0.0) or 0.0), 2),
-                    "reason": "Популярно у учреждений того же типа",
+                    "reason": "Популярно у организаций того же типа",
                     "recommendationScore": round(
                         prefix_score * 0.06
                         + popularity_score
                         + specificity_score
-                        + category_boost
-                        + code_boost
-                        + peer_recommendation_boost
+                        + type_relevance_boost
                         - generic_penalty,
                         4,
                     ),
@@ -1451,56 +1536,232 @@ class TenderHackApiService:
                 + [str(reason) for reason in item.get("reasons", []) if reason]
             )
 
+    def _load_cart_context_items(self, cart_ste_ids: List[str]) -> List[dict]:
+        if not cart_ste_ids:
+            return []
+
+        unique_ids = unique_preserve_order([str(value) for value in cart_ste_ids if value])
+        if not unique_ids:
+            return []
+
+        placeholders = ", ".join("?" for _ in unique_ids)
+        rows = self.search_service.conn.execute(
+            f"""
+            SELECT
+                ste_id,
+                clean_name,
+                normalized_name,
+                category,
+                normalized_category,
+                key_tokens
+            FROM ste_catalog
+            WHERE ste_id IN ({placeholders})
+            """,
+            unique_ids,
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    @classmethod
+    def _cart_context_signature_stems(cls, item: dict, query: str) -> set[str]:
+        query_stems = {stem_token(token) for token in cls._significant_tokens(query) if stem_token(token)}
+        item_tokens = cls._significant_tokens(
+            " ".join(
+                part
+                for part in [
+                    str(item.get("normalized_name") or item.get("clean_name") or ""),
+                    str(item.get("key_tokens") or ""),
+                ]
+                if part
+            )
+        )
+        item_stems = {stem_token(token) for token in item_tokens if stem_token(token)}
+        return item_stems - query_stems
+
+    @classmethod
+    def _cart_context_candidate_stems(cls, item: dict) -> set[str]:
+        candidate_tokens = cls._significant_tokens(
+            " ".join(
+                part
+                for part in [
+                    str(item.get("normalized_name") or item.get("clean_name") or ""),
+                    str(item.get("key_tokens") or ""),
+                ]
+                if part
+            )
+        )
+        return {stem_token(token) for token in candidate_tokens if stem_token(token)}
+
+    @classmethod
+    def _cart_context_discriminative_stems(
+        cls,
+        *,
+        cart_item: dict,
+        query: str,
+        results: List[dict],
+    ) -> set[str]:
+        signature_stems = cls._cart_context_signature_stems(cart_item, query)
+        if not signature_stems or not results:
+            return set()
+
+        result_stem_sets = [cls._cart_context_candidate_stems(item) for item in results]
+        result_count = max(1, len(result_stem_sets))
+        return {
+            stem
+            for stem in signature_stems
+            if sum(1 for stem_set in result_stem_sets if stem in stem_set) / result_count
+            <= cls.MAX_CART_CONTEXT_SIGNATURE_RESULT_SHARE
+        }
+
+    @classmethod
+    def _cart_context_similarity(cls, *, candidate: dict, cart_item: dict, signature_stems: set[str]) -> float:
+        candidate_id = str(candidate.get("ste_id") or candidate.get("candidate_id") or "")
+        cart_id = str(cart_item.get("ste_id") or "")
+        if candidate_id and cart_id and candidate_id == cart_id:
+            return 1.0
+
+        if not signature_stems:
+            return 0.0
+
+        candidate_stems = cls._cart_context_candidate_stems(candidate)
+        if not candidate_stems:
+            return 0.0
+
+        overlap_count = len(signature_stems & candidate_stems)
+        if overlap_count == 0:
+            return 0.0
+
+        category_norm = normalize_text(str(candidate.get("category") or candidate.get("normalized_category") or ""))
+        cart_category_norm = normalize_text(str(cart_item.get("category") or cart_item.get("normalized_category") or ""))
+        same_category = bool(category_norm and cart_category_norm and category_norm == cart_category_norm)
+        coverage = overlap_count / max(1, len(signature_stems))
+        if not same_category and coverage < 0.75:
+            return 0.0
+        if coverage < 0.5:
+            return 0.0
+        return min(1.0, coverage + (0.2 if same_category else 0.0))
+
+    @classmethod
+    def _apply_cart_context_boost(
+        cls,
+        results: List[dict],
+        *,
+        query: str,
+        cart_items: List[dict],
+    ) -> List[dict]:
+        if not results or not cart_items:
+            return results
+
+        cart_ids = {str(item.get("ste_id") or "") for item in cart_items if item.get("ste_id")}
+        discriminative_signature_by_cart_id = {
+            str(cart_item.get("ste_id") or ""): cls._cart_context_discriminative_stems(
+                cart_item=cart_item,
+                query=query,
+                results=results,
+            )
+            for cart_item in cart_items
+            if cart_item.get("ste_id")
+        }
+        candidate_boosts: dict[int, tuple[float, float]] = {}
+        for index, item in enumerate(results):
+            ste_id = str(item.get("ste_id") or item.get("candidate_id") or "")
+            if ste_id and ste_id in cart_ids:
+                continue
+
+            best_similarity = 0.0
+            best_base_score = float(item.get("final_score", item.get("search_score", 0.0)) or 0.0)
+            for cart_item in cart_items:
+                signature_stems = discriminative_signature_by_cart_id.get(str(cart_item.get("ste_id") or ""), set())
+                best_similarity = max(
+                    best_similarity,
+                    cls._cart_context_similarity(
+                        candidate=item,
+                        cart_item=cart_item,
+                        signature_stems=signature_stems,
+                    ),
+                )
+            if best_similarity < 0.5:
+                continue
+            candidate_boosts[index] = (best_similarity, best_base_score)
+
+        boosted_indexes = {
+            index
+            for index, _ in sorted(
+                candidate_boosts.items(),
+                key=lambda entry: (entry[1][0], entry[1][1]),
+                reverse=True,
+            )[: cls.MAX_CART_CONTEXT_BOOSTED_RESULTS]
+        }
+        updated_results: List[dict] = []
+        for index, item in enumerate(results):
+            ste_id = str(item.get("ste_id") or item.get("candidate_id") or "")
+            if ste_id and ste_id in cart_ids:
+                updated_results.append(item)
+                continue
+
+            boost_payload = candidate_boosts.get(index)
+            if not boost_payload or index not in boosted_indexes:
+                updated_results.append(item)
+                continue
+
+            boosted = dict(item)
+            base_score = float(boosted.get("final_score", boosted.get("search_score", 0.0)) or 0.0)
+            best_similarity = boost_payload[0]
+            context_multiplier = 1.0 + 0.06 * best_similarity
+            context_boost = base_score * (context_multiplier - 1.0)
+            boosted["final_score"] = round(base_score * context_multiplier, 6)
+            boosted["cart_context_similarity"] = round(best_similarity, 6)
+            boosted["cart_context_boost"] = round(context_boost, 6)
+            boosted["cart_context_multiplier"] = round(context_multiplier, 6)
+            existing_codes = [str(code) for code in boosted.get("top_reason_codes", []) if code]
+            if "SESSION_CART_CONTEXT_BOOST" not in existing_codes:
+                existing_codes = ["SESSION_CART_CONTEXT_BOOST", *existing_codes]
+            boosted["top_reason_codes"] = existing_codes
+            boosted["reasons"] = unique_preserve_order(
+                ["Поднято после добавления похожего товара в корзину"]
+                + [str(reason) for reason in boosted.get("reasons", []) if reason]
+            )
+            updated_results.append(boosted)
+
+        updated_results.sort(
+            key=lambda item: (
+                float(item.get("session_priority", 0.0)),
+                float(item.get("final_score", item.get("search_score", 0.0))),
+                float(item.get("search_score", 0.0)),
+                float(item.get("history_priority", 0.0)),
+                float(item.get("personalization_score", 0.0)),
+            ),
+            reverse=True,
+        )
+        return updated_results
+
     def _load_same_type_prefix_stats(
         self,
         *,
         ste_ids: List[str],
         peer_inns: List[str],
-        archetype_categories: List[dict],
         customer_inn: str,
     ) -> dict[str, dict]:
         if not ste_ids:
             return {}
 
         ste_placeholders = ", ".join("?" for _ in ste_ids)
-        rows = []
-        if peer_inns:
-            peer_placeholders = ", ".join("?" for _ in peer_inns)
-            rows = self.personalization_service.conn.execute(
-                f"""
-                SELECT
-                    cs.ste_id,
-                    SUM(cs.purchase_count) AS purchase_count,
-                    SUM(cs.total_amount) AS total_amount
-                FROM customer_ste_stats cs
-                WHERE cs.customer_inn IN ({peer_placeholders})
-                  AND cs.ste_id IN ({ste_placeholders})
-                GROUP BY cs.ste_id
-                ORDER BY purchase_count DESC, total_amount DESC
-                """,
-                [*peer_inns, *ste_ids],
-            ).fetchall()
-
-        if not rows:
-            category_ids = [int(item.get("category_id") or 0) for item in archetype_categories if int(item.get("category_id") or 0) > 0]
-            if not category_ids:
-                return {}
-            category_placeholders = ", ".join("?" for _ in category_ids)
-            rows = self.personalization_service.conn.execute(
-                f"""
-                SELECT
-                    cs.ste_id,
-                    SUM(cs.purchase_count) AS purchase_count,
-                    SUM(cs.total_amount) AS total_amount
-                FROM customer_ste_stats cs
-                WHERE cs.customer_inn <> ?
-                  AND cs.category_id IN ({category_placeholders})
-                  AND cs.ste_id IN ({ste_placeholders})
-                GROUP BY cs.ste_id
-                ORDER BY purchase_count DESC, total_amount DESC
-                """,
-                [customer_inn, *category_ids, *ste_ids],
-            ).fetchall()
+        if not peer_inns:
+            return {}
+        peer_placeholders = ", ".join("?" for _ in peer_inns)
+        rows = self.personalization_service.conn.execute(
+            f"""
+            SELECT
+                cs.ste_id,
+                SUM(cs.purchase_count) AS purchase_count,
+                SUM(cs.total_amount) AS total_amount
+            FROM customer_ste_stats cs
+            WHERE cs.customer_inn IN ({peer_placeholders})
+              AND cs.ste_id IN ({ste_placeholders})
+            GROUP BY cs.ste_id
+            ORDER BY purchase_count DESC, total_amount DESC
+            """,
+            [*peer_inns, *ste_ids],
+        ).fetchall()
 
         result = {
             str(row["ste_id"]): {
@@ -1971,7 +2232,7 @@ class TenderHackApiService:
         session_category_set = {normalize_text(value) for value in session_categories if value}
         category_norm = normalize_text(category)
 
-        if "SESSION_CART_BOOST" in codes or "SESSION_CLICK_BOOST" in codes:
+        if "SESSION_CART_BOOST" in codes or "SESSION_CART_CONTEXT_BOOST" in codes or "SESSION_CLICK_BOOST" in codes:
             return "Продолжить подбор в этой категории"
         if "INSTITUTION_TYPE_PREFIX_MATCH" in codes:
             return "По типу учреждения"
