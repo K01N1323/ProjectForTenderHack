@@ -201,11 +201,13 @@ class EventResponsePayload(BaseModel):
 class TenderHackApiService:
     LOGIN_CACHE_VERSION = 7
     SEARCH_CACHE_VERSION = 9
-    SUGGESTIONS_CACHE_VERSION = 23
+    SUGGESTIONS_CACHE_VERSION = 25
     PROFILE_TOP_CATEGORIES_LIMIT = 6
     PROFILE_FREQUENT_PRODUCTS_LIMIT = 18
     MAX_HISTORY_CATEGORY_SUGGESTIONS = 1
     MAX_HISTORY_REASON_SUGGESTIONS = 3
+    MAX_INSTITUTION_TYPE_SUGGESTIONS = 3
+    MIN_QUERY_COMPLETION_SUGGESTIONS = 3
     _SUGGESTION_TYPE_PRIORITY = {
         "correction": 4,
         "product": 3,
@@ -664,20 +666,32 @@ class TenderHackApiService:
         abstract_suggestions = self._diversify_suggestions_by_family(
             self._merge_suggestion_groups(completion_suggestions, abstract_suggestions, query=query)
         )
+        reserved_abstract_slots = 0
         if short_personalized_prefix and same_type_prefix_suggestions:
-            abstract_suggestions = []
+            query_first_abstract_suggestions = [
+                item for item in abstract_suggestions if item.type in {"query", "correction"}
+            ]
+            other_abstract_suggestions = [
+                item for item in abstract_suggestions if item.type not in {"query", "correction"}
+            ]
+            abstract_suggestions = [*query_first_abstract_suggestions, *other_abstract_suggestions]
+            reserved_abstract_slots = min(
+                top_k,
+                self.MIN_QUERY_COMPLETION_SUGGESTIONS,
+                len(query_first_abstract_suggestions),
+            )
         primary_suggestions = self._dedupe_suggestions(suggestions, query=query)
-        diversified_primary_suggestions, history_overflow_suggestions = self._partition_suggestions_by_history_limit(
+        diversified_primary_suggestions, _limited_reason_overflow = self._partition_suggestions_by_history_limit(
             primary_suggestions,
             top_k=top_k,
         )
         if diversified_primary_suggestions:
-            remaining_slots = max(0, top_k - len(diversified_primary_suggestions))
-            suggestions = list(diversified_primary_suggestions)
+            max_primary_slots = max(0, top_k - reserved_abstract_slots)
+            suggestions = list(diversified_primary_suggestions[:max_primary_slots])
+            remaining_slots = max(0, top_k - len(suggestions))
             suggestions.extend(abstract_suggestions[:remaining_slots])
-            suggestions.extend(history_overflow_suggestions)
         else:
-            suggestions = list(abstract_suggestions)
+            suggestions = list(abstract_suggestions[:top_k])
         result = self._dedupe_suggestions(suggestions, query=query)[:top_k]
         self.cache_service.set_json(
             cache_key,
@@ -1761,10 +1775,17 @@ class TenderHackApiService:
         overflow: List[SuggestionPayload] = []
         history_category_count = 0
         history_total_count = 0
+        institution_type_count = 0
 
         for item in suggestions:
             history_bucket = cls._suggestion_history_bucket(item)
+            suggestion_reason = str(item.reason or "")
             if not history_bucket:
+                if suggestion_reason == "По типу учреждения":
+                    if institution_type_count >= min(cls.MAX_INSTITUTION_TYPE_SUGGESTIONS, top_k):
+                        overflow.append(item)
+                        continue
+                    institution_type_count += 1
                 kept.append(item)
                 continue
 

@@ -1043,6 +1043,108 @@ class ApiTests(unittest.TestCase):
         self.assertIn("Популярное продолжение", reasons)
         self.assertEqual(len(overflow), 1)
 
+    def test_institution_type_reason_cap_keeps_room_for_query_suggestions(self) -> None:
+        suggestions = [
+            TenderHackApiService._build_suggestion(
+                text="Ручка гелевая черная",
+                suggestion_type="product",
+                reason="По типу учреждения",
+                score=300.0,
+            ),
+            TenderHackApiService._build_suggestion(
+                text="Ручка шариковая",
+                suggestion_type="product",
+                reason="По типу учреждения",
+                score=290.0,
+            ),
+            TenderHackApiService._build_suggestion(
+                text="Ручка шариковая черная",
+                suggestion_type="product",
+                reason="По типу учреждения",
+                score=280.0,
+            ),
+            TenderHackApiService._build_suggestion(
+                text="Ручка шариковая business",
+                suggestion_type="product",
+                reason="По типу учреждения",
+                score=270.0,
+            ),
+            TenderHackApiService._build_suggestion(
+                text="ручка офисная красная",
+                suggestion_type="query",
+                reason="Продолжение запроса",
+                score=180.0,
+            ),
+            TenderHackApiService._build_suggestion(
+                text="ручка канцелярская синяя",
+                suggestion_type="query",
+                reason="Продолжение запроса",
+                score=175.0,
+            ),
+        ]
+
+        kept, overflow = TenderHackApiService._partition_suggestions_by_history_limit(suggestions, top_k=8)
+        reasons = [item.reason for item in kept]
+
+        self.assertEqual(reasons.count("По типу учреждения"), 3)
+        self.assertIn("Продолжение запроса", reasons)
+        self.assertEqual(len(overflow), 1)
+
+    def test_short_same_type_prefix_reserves_slots_for_query_completions(self) -> None:
+        service = self.client.app.state.service
+        with (
+            patch.object(
+                service,
+                "_resolve_same_type_prefix_products",
+                return_value=[
+                    {
+                        "steId": "ste-x1",
+                        "name": "Ручка гелевая черная",
+                        "category": "Ручки канцелярские",
+                        "purchaseCount": 9,
+                        "reason": "Популярно у учреждений того же типа",
+                        "recommendationScore": 9.0,
+                    },
+                    {
+                        "steId": "ste-x2",
+                        "name": "Ручка шариковая",
+                        "category": "Ручки канцелярские",
+                        "purchaseCount": 8,
+                        "reason": "Популярно у учреждений того же типа",
+                        "recommendationScore": 8.0,
+                    },
+                    {
+                        "steId": "ste-x3",
+                        "name": "Ручка шариковая черная",
+                        "category": "Ручки канцелярские",
+                        "purchaseCount": 7,
+                        "reason": "Популярно у учреждений того же типа",
+                        "recommendationScore": 7.0,
+                    },
+                    {
+                        "steId": "ste-x4",
+                        "name": "Ручка шариковая business",
+                        "category": "Ручки канцелярские",
+                        "purchaseCount": 6,
+                        "reason": "Популярно у учреждений того же типа",
+                        "recommendationScore": 6.0,
+                    },
+                ],
+            ),
+            patch.object(service, "_resolve_suggestion_products", return_value=[]),
+            patch.object(service, "_resolve_suggestion_categories", return_value=[]),
+            patch.object(service, "_resolve_suggestion_user_weights", return_value={}),
+            patch.object(service, "_resolve_suggestion_user_ste_weights", return_value={}),
+        ):
+            payload = service.suggestions(query="руч", user_inn="7700000000", top_k=6)
+
+        reasons = [item.reason for item in payload]
+        suggestion_types = [item.type for item in payload]
+        self.assertEqual(reasons.count("По типу учреждения"), 3)
+        self.assertGreaterEqual(suggestion_types.count("query"), 2)
+        self.assertGreaterEqual(sum(1 for reason in reasons if reason != "По типу учреждения"), 3)
+        self.assertTrue(all(reason == "По типу учреждения" for reason in reasons[:3]))
+
     def test_suggestions_do_not_personalize_one_off_products_by_prefix(self) -> None:
         response = self.client.get(
             "/api/search/suggestions",
